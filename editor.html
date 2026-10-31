@@ -91,6 +91,24 @@
   #find-count { min-width: 44px; text-align: center; opacity: .65; font-size: 12px; }
   ::highlight(mde-hits) { background-color: rgba(255, 213, 79, .6); }
   ::highlight(mde-cur) { background-color: #ff9f43; color: #fff; }
+
+  /* ---- 代码模式（CodeMirror 6） ---- */
+  #cmhost { height: 100%; }
+  #cmhost .cm-editor { height: 100%; font-size: calc(14px * var(--code-zoom, 1)); }
+  #cmhost .cm-editor.cm-focused { outline: none; }
+  #cmhost .cm-scroller { font-family: Consolas, "Courier New", "Microsoft YaHei", monospace; line-height: 1.55; }
+  #cmhost .cm-gutters { background: var(--bar-bg); color: var(--bar-fg); opacity: .6; border-right: 1px solid var(--bar-border); }
+  #cmhost .cm-activeLine { background: rgba(127,127,127,.08); }
+  #cmhost .cm-activeLineGutter { background: rgba(127,127,127,.08); }
+  #cmhost .cm-searchMatch { background-color: rgba(255, 213, 79, .55); }
+  #cmhost .cm-searchMatch-selected { background-color: #ff9f43; color: #fff; }
+  #cmhost .cm-selectionMatch { background-color: rgba(126, 160, 255, .25); }
+  body.dark #cmhost .cm-content { caret-color: #d0d0d0; }
+  body.dark #cmhost .cm-selectionBackground { background: rgba(126, 160, 255, .30) !important; }
+  body.dark #cmhost .cm-cursor { border-left-color: #d0d0d0; }
+  body.dark #cmhost .cm-gutters { background: #1e2028; }
+  body.dark #cmhost .cm-activeLine { background: rgba(255,255,255,.05); }
+  body.dark #cmhost .cm-activeLineGutter { background: rgba(255,255,255,.05); }
   /* !important 必须保留：vditor 初始化时会给容器写内联 height:auto，普通 CSS 压不过它
      （vditor 的根元素就是 #editor 本身，会加上 .vditor 类） */
   #editor { height: 100% !important; overflow: hidden; }
@@ -162,18 +180,25 @@
     </div>
   </div>
   <div id="editor"></div>
+  <div id="cmhost" style="display:none"></div>
 </main>
 <input type="file" id="fallback-open" accept=".md,.markdown,.txt" hidden>
 <div id="ctxmenu"></div>
 <div id="toast"></div>
 
 <script src="./dist/index.min.js"></script>
+<script src="./cm6.js"></script>
 <script>
 'use strict';
 /* ---------- 全局状态 ---------- */
 var vditor = null;
 var ready = false;
 var dark = localStorage.getItem('mde:dark') === '1';
+var cmView = null;          // 代码模式编辑器（CodeMirror 6）
+var cmLangComp = null;
+var editorKind = 'md';      // 'md' | 'code'
+var zoomFactor = parseFloat(localStorage.getItem('mde:zoom')) || 1;
+var lastEditAt = 0;
 
 /* ---------- 多标签页模型 ---------- */
 var tabs = [];            // { id, name, path(桌面版), fh(网页版句柄), content, dirty, scroll }
@@ -193,8 +218,22 @@ function tabById(id) {
   for (var i = 0; i < tabs.length; i++) if (tabs[i].id === id) return tabs[i];
   return null;
 }
+/* 按文件名决定编辑器模式：.md 走所见即所得，其余走代码模式（CodeMirror 6） */
+function kindOf(name) {
+  name = name || '';
+  if (/\.(md|markdown)$/i.test(name)) return { kind: 'md', lang: null };
+  var m = name.match(/\.([a-z0-9]+)$/i);
+  var ext = m ? m[1].toLowerCase() : '';
+  var map = { java: 'java', sql: 'sql', json: 'json', xml: 'xml', html: 'html', htm: 'html', css: 'css', js: 'javascript', mjs: 'javascript', ts: 'javascript', tsx: 'javascript', jsx: 'javascript', py: 'python', c: 'cpp', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp' };
+  if (map[ext]) return { kind: 'code', lang: map[ext] };
+  if (!ext) return { kind: /^未命名/.test(name) ? 'md' : 'code', lang: null };
+  return { kind: 'code', lang: null };
+}
 function newTabObj(name, content, path, fh) {
-  return { id: 't' + (tabSeq++), name: name || '未命名', path: path || null, fh: fh || null, content: content || '', dirty: false, scroll: 0 };
+  var t = { id: 't' + (tabSeq++), name: name || '未命名', path: path || null, fh: fh || null, content: content || '', dirty: false, scroll: 0 };
+  var k = kindOf(name);
+  t.kind = k.kind; t.lang = k.lang;
+  return t;
 }
 function renderTabs() {
   var bar = $('tabbar');
@@ -219,7 +258,7 @@ function renderTabs() {
 }
 /* 标签标题：取正文第一个非空行（# 标题自动去掉井号），空文档回退到文件名 */
 function docTitleOf(t, liveText) {
-  var text = liveText != null ? liveText : (t.id === activeId && ready ? vditor.getValue() : t.content || '');
+  var text = liveText != null ? liveText : (t.id === activeId && ready ? activeText() : t.content || '');
   var lines = text.split('\n');
   for (var i = 0; i < lines.length && i < 10; i++) {
     var L = lines[i].trim();
@@ -258,6 +297,77 @@ function setDirty(v) {
   if (window.desktop) window.desktop.setDirty(tabs.some(function (x) { return x.dirty; }));
 }
 
+/* ---------- 代码模式（CodeMirror 6） ---------- */
+function cmEnsure(t) {
+  if (cmView) return cmView;
+  cmLangComp = new CM6.Compartment();
+  cmView = new CM6.EditorView({
+    doc: '',
+    parent: $('cmhost'),
+    extensions: [
+      CM6.lineNumbers(),
+      CM6.highlightActiveLineGutter(),
+      CM6.highlightActiveLine(),
+      CM6.drawSelection(),
+      CM6.dropCursor(),
+      CM6.bracketMatching(),
+      CM6.foldGutter(),
+      CM6.history(),
+      CM6.keymap.of([CM6.defaultKeymap, CM6.historyKeymap, CM6.foldKeymap, CM6.indentWithTab]),
+      CM6.search(),
+      CM6.highlightSelectionMatches(),
+      CM6.syntaxHighlighting(CM6.defaultHighlightStyle, { fallback: true }),
+      cmLangComp.of(t && t.lang && CM6.langs[t.lang] ? CM6.langs[t.lang]() : []),
+      CM6.EditorView.updateListener.of(function (u) {
+        if (u.docChanged && ready) {
+          lastEditAt = Date.now();
+          setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh();
+        }
+      })
+    ]
+  });
+  return cmView;
+}
+function cmSetLang(langName) {
+  if (!cmView || !cmLangComp) return;
+  var ext = (langName && CM6.langs[langName]) ? CM6.langs[langName]() : [];
+  cmView.dispatch({ effects: cmLangComp.reconfigure(ext) });
+}
+function applyEditorKind(t) {
+  var kind = (t && t.kind) || 'md';
+  editorKind = kind;
+  if (kind === 'code') {
+    $('editor').style.display = 'none';
+    $('cmhost').style.display = 'block';
+    cmEnsure(t);
+    cmSetLang(t.lang);
+    setTimeout(function () { if (cmView) cmView.requestMeasure(); }, 0);
+  } else {
+    $('cmhost').style.display = 'none';
+    $('editor').style.display = 'block';
+  }
+}
+function isCodeMode() { return editorKind === 'code'; }
+function activeText() {
+  return isCodeMode() ? cmView.state.doc.toString() : vditor.getValue();
+}
+function setEditorText(text) {
+  if (isCodeMode()) cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: text } });
+  else return vditor.setValue(text);
+}
+function applyZoom() {
+  localStorage.setItem('mde:zoom', String(zoomFactor));
+  document.documentElement.style.setProperty('--code-zoom', String(zoomFactor));
+  var reset = document.querySelector('.vditor-ir .vditor-reset');
+  if (reset) reset.style.fontSize = (16 * zoomFactor) + 'px';
+}
+window.addEventListener('wheel', function (e) {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  zoomFactor = Math.min(3, Math.max(0.5, zoomFactor * (e.deltaY < 0 ? 1.08 : 1 / 1.08)));
+  applyZoom();
+}, { passive: false });
+
 /* ---------- 草稿 ---------- */
 function readDraft(id) {
   try { var raw = localStorage.getItem('mde:draft:' + id); return raw ? JSON.parse(raw) : null; }
@@ -267,10 +377,11 @@ function writeDraft(t, content) {
   try { localStorage.setItem('mde:draft:' + t.id, JSON.stringify({ t: content, at: Date.now() })); } catch (e) {}
 }
 function clearDraft(id) { try { localStorage.removeItem('mde:draft:' + id); } catch (e) {} }
+/* 大文件优化：草稿改为"停止输入 2.5 秒后"落盘，避免长文档周期性整篇序列化 */
 setInterval(function () {
   var t = activeTab();
-  if (ready && t && t.dirty) writeDraft(t, vditor.getValue());
-}, 10000);
+  if (ready && t && t.dirty && Date.now() - lastEditAt > 2500) writeDraft(t, activeText());
+}, 5000);
 
 /* ---------- 欢迎文档 ---------- */
 var WELCOME = [
@@ -331,18 +442,24 @@ var WELCOME = [
 function cacheActive() {
   var cur = activeTab();
   if (!cur || !ready) return;
-  cur.content = vditor.getValue();
+  cur.content = activeText();
   if (cur.dirty) writeDraft(cur, cur.content);
-  var irEl = document.querySelector('.vditor-ir');
-  if (irEl) cur.scroll = irEl.scrollTop;
+  var sc = cur.kind === 'code' ? document.querySelector('#cmhost .cm-scroller') : document.querySelector('.vditor-ir');
+  if (sc) cur.scroll = sc.scrollTop;
 }
 async function activateTab(t) {
   activeId = t.id;
-  await vditor.setValue(t.content || '');
-  var irEl = document.querySelector('.vditor-ir');
-  if (irEl) irEl.scrollTop = t.scroll || 0;
+  applyEditorKind(t);
+  if (t.kind === 'code') {
+    cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: t.content || '' } });
+  } else {
+    await vditor.setValue(t.content || '');
+  }
+  var sc = t.kind === 'code' ? document.querySelector('#cmhost .cm-scroller') : document.querySelector('.vditor-ir');
+  if (sc) sc.scrollTop = t.scroll || 0;
   setDirty(t.dirty);
   renderTabs();
+  applyZoom();
   if (findState.open) setTimeout(function () { runSearch(true); }, 250);
 }
 async function switchTab(id) {
@@ -454,7 +571,7 @@ function fallbackSave(text) {
 }
 async function save() {
   var t = activeTab(); if (!t || !ready) return;
-  var text = vditor.getValue();
+  var text = activeText();
   if (window.desktop) {
     if (!t.path) return saveAs();
     var r = await window.desktop.write(t.path, text);
@@ -475,7 +592,7 @@ async function save() {
 }
 async function saveAs() {
   var t = activeTab(); if (!t) return;
-  var text = vditor.getValue();
+  var text = activeText();
   if (window.desktop) {
     var r = await window.desktop.saveAs(text, /\.md$|\.txt$/i.test(t.name) ? t.name : t.name + '.md');
     if (r.canceled) return;
@@ -505,13 +622,19 @@ function newFile() {
 var FALLBACK_CSS = 'body{max-width:800px;margin:40px auto;padding:0 20px;font-family:Georgia,"Microsoft YaHei",serif;line-height:1.7;color:#24292f}pre{background:#f6f8fa;padding:14px;border-radius:6px;overflow:auto}code{background:#f6f8fa;padding:2px 5px;border-radius:4px;font-family:Consolas,monospace;font-size:.9em}pre code{background:none;padding:0}table{border-collapse:collapse;margin:1em 0}th,td{border:1px solid #d0d7de;padding:6px 14px}blockquote{border-left:4px solid #d0d7de;margin:0;padding:0 1em;color:#57606a}img{max-width:100%}';
 async function buildExportHtml() {
   var t = activeTab();
-  var body = vditor.getHTML();
   var css = FALLBACK_CSS;
-  try {
-    var main = await fetch('./dist/index.css').then(function (r) { return r.text(); });
-    var theme = await fetch('./dist/css/content-theme/light.css').then(function (r) { return r.text(); });
-    css = main + '\n' + theme;
-  } catch (e) { body = '<div style="' + 'max-width:800px;margin:40px auto' + '">' + body + '</div>'; }
+  var body;
+  if (isCodeMode()) {
+    var txt = activeText().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    body = '<pre style="font-family:Consolas,monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;margin:0">' + txt + '</pre>';
+  } else {
+    body = vditor.getHTML();
+    try {
+      var main = await fetch('./dist/index.css').then(function (r) { return r.text(); });
+      var theme = await fetch('./dist/css/content-theme/light.css').then(function (r) { return r.text(); });
+      css = main + '\n' + theme;
+    } catch (e) { body = '<div style="' + 'max-width:800px;margin:40px auto' + '">' + body + '</div>'; }
+  }
   return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>' +
     (t ? t.name : '文档').replace(/</g, '&lt;') + '</title><style>' + css + '</style></head><body class="vditor-reset">' +
     body + '</body></html>';
@@ -688,6 +811,20 @@ function showTableMenu(x, y, cell) {
   ]);
 }
 window.addEventListener('contextmenu', function (e) {
+  var inCm = e.target.closest && e.target.closest('#cmhost');
+  if (inCm) {
+    e.preventDefault();
+    showCtx(e.clientX, e.clientY, [
+      { label: '剪切', fn: function () { if (window.desktop) window.desktop.editCmd('cut'); } },
+      { label: '复制', fn: function () { if (window.desktop) window.desktop.editCmd('copy'); } },
+      { label: '粘贴', fn: function () { if (window.desktop) window.desktop.editCmd('paste'); } },
+      { sep: true },
+      { label: '全选', fn: function () { if (window.desktop) window.desktop.editCmd('selectAll'); } },
+      { sep: true },
+      { label: '查找替换', fn: function () { openFind(true); } }
+    ]);
+    return;
+  }
   var inEditor = e.target.closest && e.target.closest('.vditor-reset');
   if (!inEditor) return;
   e.preventDefault();
@@ -709,6 +846,14 @@ var findState = { query: '', caseSensitive: false, ranges: [], idx: -1, open: fa
 function findBarEl() { return $('findbar'); }
 
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function countOccurrences(text, needle, caseSensitive) {
+  if (!needle) return 0;
+  var hay = caseSensitive ? text : text.toLowerCase();
+  var nd = caseSensitive ? needle : needle.toLowerCase();
+  var n = 0, pos = 0;
+  while ((pos = hay.indexOf(nd, pos)) >= 0) { n++; pos += nd.length; }
+  return n;
+}
 function clearSearchHighlights() {
   if (window.CSS && CSS.highlights) { CSS.highlights.delete('mde-hits'); CSS.highlights.delete('mde-cur'); }
   findState.ranges = []; findState.idx = -1;
@@ -726,6 +871,7 @@ function openFind(withReplace) {
 function closeFind() {
   findState.open = false;
   findBarEl().classList.remove('show');
+  if (isCodeMode() && cmView) cmView.dispatch({ effects: CM6.setSearchQuery.of(new CM6.SearchQuery({ search: '' })) });
   clearSearchHighlights();
 }
 /* 把编辑器文本按块级元素分段（匹配不允许跨块），返回每段的文本与文本节点索引 */
@@ -760,6 +906,18 @@ function offsetToRange(seg, start, end) {
 function runSearch(keepNearCaret) {
   var q = $('find-input').value;
   findState.query = q;
+  if (isCodeMode()) {                 // 代码模式：交给 CM6 搜索（自带高亮与跳转）
+    findState.ranges = [];
+    findState.idx = -1;
+    if (cmView) {
+      var query = new CM6.SearchQuery({ search: q, caseSensitive: findState.caseSensitive, replace: $('replace-input').value });
+      cmView.dispatch({ effects: CM6.setSearchQuery.of(query) });
+      findState.cmCount = countOccurrences(cmView.state.doc.toString(), q, findState.caseSensitive);
+      findState.cmPos = q ? 1 : 0;
+    } else { findState.cmCount = 0; findState.cmPos = 0; }
+    $('find-count').textContent = q ? findState.cmCount + ' 处' : '0/0';
+    return;
+  }
   findState.ranges = [];
   var root = document.querySelector('.vditor-ir .vditor-reset');   // 页面有多个 .vditor-reset（含隐藏模板），只取编辑区那个
   if (q && root) {
@@ -792,6 +950,11 @@ function runSearch(keepNearCaret) {
   drawSearch();
 }
 function drawSearch() {
+  if (isCodeMode()) {
+    var total = findState.cmCount || 0;
+    $('find-count').textContent = (findState.query && total) ? findState.cmPos + '/' + total : (findState.query ? '0/0' : '0/0');
+    return;
+  }
   var n = findState.ranges.length;
   $('find-count').textContent = n ? (findState.idx + 1) + '/' + n : '0/0';
   if (window.CSS && CSS.highlights) {
@@ -826,12 +989,40 @@ function scrollToCurrent() {
     el = el.parentElement;
   }
 }
+function cmSyncPos() {
+  /* 用当前选区估算当前是第几处匹配 */
+  if (!cmView) { findState.cmPos = 0; return; }
+  var q = findState.query; if (!q) { findState.cmPos = 0; return; }
+  var text = cmView.state.doc.toString();
+  var hay = findState.caseSensitive ? text : text.toLowerCase();
+  var nd = findState.caseSensitive ? q : q.toLowerCase();
+  var from = cmView.state.selection.main.from;
+  var m = 0, pos = 0;
+  while ((pos = hay.indexOf(nd, pos)) >= 0) {
+    if (pos > from) break;
+    m++; pos += Math.max(nd.length, 1);
+  }
+  findState.cmPos = m;
+  findState.cmCount = countOccurrences(text, q, findState.caseSensitive);
+}
 function findNext() {
+  if (isCodeMode() && cmView) {
+    if (!findState.query) return;
+    CM6.findNext(cmView);
+    cmSyncPos(); drawSearch();
+    return;
+  }
   var n = findState.ranges.length; if (!n) return;
   findState.idx = (findState.idx + 1) % n;
   drawSearch();
 }
 function findPrev() {
+  if (isCodeMode() && cmView) {
+    if (!findState.query) return;
+    CM6.findPrevious(cmView);
+    cmSyncPos(); drawSearch();
+    return;
+  }
   var n = findState.ranges.length; if (!n) return;
   findState.idx = (findState.idx - 1 + n) % n;
   drawSearch();
@@ -843,6 +1034,14 @@ function vdSyncCaret(el) {
   reset.dispatchEvent(new Event('input', { bubbles: true }));
 }
 function replaceCurrent() {
+  if (isCodeMode() && cmView) {
+    var query = new CM6.SearchQuery({ search: findState.query, caseSensitive: findState.caseSensitive, replace: $('replace-input').value });
+    cmView.dispatch({ effects: CM6.setSearchQuery.of(query) });
+    CM6.findNext(cmView);      // 先让光标落在匹配上，replaceNext 才会生效
+    CM6.replaceNext(cmView);
+    cmSyncPos(); drawSearch();
+    return;
+  }
   if (!findState.ranges.length || findState.idx < 0) return;
   var rg = findState.ranges[findState.idx];
   if (!rg.startContainer.isConnected) { runSearch(true); if (!findState.ranges.length) return; rg = findState.ranges[findState.idx]; }
@@ -861,17 +1060,17 @@ function replaceCurrent() {
 function replaceAll() {
   var q = $('find-input').value;
   if (!q) return;
-  var md = vditor.getValue();
+  var md = activeText();
   var re = new RegExp(escapeRegExp(q), findState.caseSensitive ? 'g' : 'gi');
   var n = (md.match(re) || []).length;
   if (!n) { toast('没有找到「' + q + '」'); return; }
   var rep = $('replace-input').value.replace(/\$/g, '$$$$');
   var newMd = md.replace(re, rep);
-  var irEl = document.querySelector('#editor .vditor-ir');
-  var st = irEl ? irEl.scrollTop : 0;
-  vditor.setValue(newMd);
+  var sc = isCodeMode() ? document.querySelector('#cmhost .cm-scroller') : document.querySelector('.vditor-ir');
+  var st = sc ? sc.scrollTop : 0;
+  setEditorText(newMd);
   setTimeout(function () {
-    if (irEl) irEl.scrollTop = st;
+    if (sc) sc.scrollTop = st;
     runSearch();
   }, 300);
   setDirty(true);
@@ -949,6 +1148,7 @@ function applyTheme() {
       vditor.setTheme(dark ? 'dark' : 'classic', dark ? 'dark' : 'light', dark ? 'vs2015' : 'github');
     } catch (e) { location.reload(); }
   }
+  applyZoom();
 }
 
 /* ---------- 菜单事件 ---------- */
@@ -1003,7 +1203,7 @@ vditor = new Vditor('editor', {
   upload: {
     handler: function (files) { insertImages(files); return ''; }
   },
-  input: function () { if (ready) { setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh(); } },
+  input: function () { if (ready) { lastEditAt = Date.now(); setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh(); } },
   after: function () {
     ready = true;
     restoreSession();

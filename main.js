@@ -2,7 +2,11 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 const path = require('path');
 const fs = require('fs');
 
-const MD_FILTERS = [{ name: 'Markdown 文档', extensions: ['md', 'markdown', 'txt'] }];
+const FILE_FILTERS = [
+  { name: '所有支持的文件', extensions: ['md', 'markdown', 'txt', 'java', 'sql', 'json', 'xml', 'html', 'htm', 'css', 'js', 'ts', 'jsx', 'tsx', 'mjs', 'py', 'c', 'cpp', 'cc', 'h', 'hpp', 'log', 'ini', 'cfg', 'conf', 'bat', 'sh', 'yml', 'yaml', 'toml', 'properties', 'csv'] },
+  { name: 'Markdown 文档', extensions: ['md', 'markdown'] },
+  { name: '所有文件', extensions: ['*'] }
+];
 let win = null;
 let isDirty = false;
 let forceClose = false;
@@ -120,7 +124,7 @@ const MENU_TMPL = [
 
 /* ---------- IPC ---------- */
 ipcMain.handle('file:open', async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: MD_FILTERS });
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: FILE_FILTERS });
   if (r.canceled) return { canceled: true };
   const p = r.filePaths[0];
   try {
@@ -149,7 +153,7 @@ ipcMain.handle('file:write', async (e, p, content) => {
 });
 
 ipcMain.handle('file:saveAs', async (e, content, suggested) => {
-  const r = await dialog.showSaveDialog(win, { filters: MD_FILTERS, defaultPath: suggested || '未命名.md' });
+  const r = await dialog.showSaveDialog(win, { filters: FILE_FILTERS, defaultPath: suggested || '未命名.md' });
   if (r.canceled) return { canceled: true };
   try {
     fs.writeFileSync(r.filePath, content, 'utf8');

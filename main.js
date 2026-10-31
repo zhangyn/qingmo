@@ -69,7 +69,8 @@ function buildMenu() {
   {
     label: '文件',
     submenu: [
-      { label: '新建标签页', accelerator: 'CmdOrCtrl+N', click: () => sendMenu('new') },
+      { label: '新建 Markdown 标签页', accelerator: 'CmdOrCtrl+N', click: () => sendMenu('new') },
+      { label: '新建 代码/文本标签页', accelerator: 'CmdOrCtrl+Alt+N', click: () => sendMenu('newcode') },
       { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => sendMenu('open') },
       { type: 'separator' },
       { label: '保存', accelerator: 'CmdOrCtrl+S', click: () => sendMenu('save') },

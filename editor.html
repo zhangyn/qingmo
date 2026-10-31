@@ -115,8 +115,13 @@
   /* md 模式关闭自动换行 */
   body.md-nowrap .vditor-ir .vditor-reset { white-space: pre; overflow-x: auto; }
   /* !important 必须保留：vditor 初始化时会给容器写内联 height:auto/width:auto/
-     display:block，全部要压回 flex 布局（vditor 的根元素就是 #editor 本身） */
+     display:block，全部要压回 flex 布局（vditor 的根元素就是 #editor 本身）。
+     代码模式用 body.code-mode 类切换显隐——不能用内联 display，
+     否则会和这里的 !important 互相打架 */
   #editor { height: 100% !important; display: flex !important; flex-direction: column; overflow: hidden; }
+  body.code-mode #editor { display: none !important; }
+  #cmhost { display: none; height: 100%; }
+  body.code-mode #cmhost { display: block; }
   #editor .vditor-content { min-height: 0; overflow: hidden; }
   #editor .vditor-ir { overflow-y: auto; min-height: 0; }
   /* md 内容从左侧开始（覆盖内核默认的 25% 居中窄栏） */
@@ -357,15 +362,11 @@ function cmSetLang(langName) {
 function applyEditorKind(t) {
   var kind = (t && t.kind) || 'md';
   editorKind = kind;
+  document.body.classList.toggle('code-mode', kind === 'code');
   if (kind === 'code') {
-    $('editor').style.display = 'none';
-    $('cmhost').style.display = 'block';
     cmEnsure(t);
     cmSetLang(t.lang);
     setTimeout(function () { if (cmView) cmView.requestMeasure(); }, 0);
-  } else {
-    $('cmhost').style.display = 'none';
-    $('editor').style.display = 'block';
   }
 }
 function isCodeMode() { return editorKind === 'code'; }

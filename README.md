@@ -12,7 +12,10 @@
 - **查找替换**：高亮定位、逐个/全部替换、大小写开关（基于 CSS Highlight API，不污染正文）
 - **表格右键菜单**：插入/删除行、列，删除表格，操作即时同步回 Markdown
 - **导出**：一键导出 PDF（printToPDF）、导出 HTML、打印
-- **其他**：代码高亮、数学公式（KaTeX）、Mermaid 图表、图片粘贴内嵌、明暗主题、字数统计
+- **代码/纯文本模式**：`.java/.sql/.json/.xml/.html/.css/.js/.py/.c/.cpp` 等文件自动切换为
+  CodeMirror 6 编辑器（语法高亮、行号、代码折叠、括号匹配、虚拟化渲染——大文件流畅）
+- **缩放**：`Ctrl+滚轮` 调整字号（两种模式通用，比例记忆）
+- **其他**：数学公式（KaTeX）、Mermaid 图表、图片粘贴内嵌、明暗主题、字数统计
 
 ## 快捷键
 
@@ -38,6 +41,8 @@ md-editor/
 │                    PDF 导出、关闭确认
 ├── preload.js       渲染层 ↔ 主进程的安全桥接（contextBridge）
 ├── package.json     应用清单（main 入口）
+├── cm6.js           CodeMirror 6 内核（esbuild 打包，含 Java/SQL/JSON/XML/
+│                    HTML/CSS/JS/Python/C++ 语言包与暗色配色）
 ├── dist/            Vditor 4.0.1 运行时（vendored，含 KaTeX/Mermaid/
 │                    代码高亮等全部依赖，离线可用）
 └── web/             备用的浏览器模式启动器（serve.py + bat）
@@ -49,8 +54,8 @@ md-editor/
    [npmmirror 镜像](https://registry.npmmirror.com/-/binary/electron/)获取 `electron-v33.x.x-win32-x64.zip` 并解压；
    已装 Node.js 也可直接 `npm i` 安装 electron 后 `npx electron .`
 2. 删除解压目录里的 `resources/default_app.asar`
-3. 将本仓库的 `editor.html`、`main.js`、`preload.js`、`package.json`、`dist/`
-   放入 `resources/app/`
+3. 将本仓库的 `editor.html`、`main.js`、`preload.js`、`package.json`、`cm6.js`、
+   `dist/` 放入 `resources/app/`
 4. 把 `electron.exe` 改名（如 `MD编辑器.exe`），双击即可运行；
    可为它创建桌面快捷方式
 
@@ -75,9 +80,10 @@ md-editor/
 ## 已知取舍
 
 - 撤销历史不跨标签页保留（切回标签后撤销栈重建）
-- "全部替换"作用于 Markdown 源文本（与 Typora 相同），也会命中代码块与链接里的文字
+- "全部替换"作用于源文本（与 Typora 相同），也会命中链接地址等位置
 - 桌面版未签名，首次运行可能被杀毒软件拦截，选择允许即可
-- 打开超大文档（百 KB 级）时即时渲染会有可感知的延迟
+- 超大 Markdown（1MB 级）的所见即所得渲染有可感知延迟——代码/文本文件
+  走 CodeMirror 模式则无此问题
 
 ## 许可
 

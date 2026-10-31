@@ -64,6 +64,22 @@
   }
   .tab .x:hover { background: var(--btn-hover); opacity: 1; }
 
+  /* ---- 代码模式工具栏 ---- */
+  #codetools {
+    display: none; align-items: center; gap: 2px;
+    padding: 3px 8px; background: var(--bar-bg);
+    border-bottom: 1px solid var(--bar-border);
+    flex-shrink: 0; user-select: none;
+  }
+  body.code-mode #codetools { display: flex; }
+  #codetools button {
+    border: 1px solid transparent; background: transparent; color: var(--bar-fg);
+    padding: 3px 8px; border-radius: 5px; cursor: pointer; font-size: 12px;
+  }
+  #codetools button:hover { background: var(--btn-hover); border-color: var(--bar-border); }
+  #codetools button.on { background: var(--accent); color: #fff; }
+  #ct-zoom { font-size: 12px; opacity: .65; min-width: 42px; text-align: center; }
+
   main { flex: 1; min-height: 0; overflow: hidden; position: relative; }
 
   /* ---- 查找替换 ---- */
@@ -177,7 +193,22 @@
   <span id="savestate"></span>
 </header>
 <div id="tabbar"></div>
-<main>
+  <div id="codetools">
+    <button id="ct-ws" title="显示空白字符">空白</button>
+    <button id="ct-wrap" title="自动换行">换行</button>
+    <span class="sep"></span>
+    <button id="ct-qs" title="合并为一行：单引号包裹，逗号分隔">'合并</button>
+    <button id="ct-qd" title="合并为一行：双引号包裹，逗号分隔">"合并</button>
+    <button id="ct-qn" title="合并为一行：逗号分隔">合并</button>
+    <button id="ct-split" title="按逗号/分号拆分为多行，自动去引号">拆分</button>
+    <span class="sep"></span>
+    <button id="ct-find" title="查找替换 (Ctrl+H)">查找替换</button>
+    <span class="spacer"></span>
+    <button id="ct-zoom-out" title="缩小字号">A−</button>
+    <span id="ct-zoom">100%</span>
+    <button id="ct-zoom-in" title="放大字号">A+</button>
+  </div>
+  <main>
   <div id="findbar">
     <div class="find-row">
       <input id="find-input" placeholder="查找…" spellcheck="false">
@@ -279,6 +310,7 @@ function renderTabs() {
 }
 /* 标签标题：取正文第一个非空行（# 标题自动去掉井号），空文档回退到文件名 */
 function docTitleOf(t, liveText) {
+  if (t.kind === 'code') return t.name;   // 代码/文本文件：页签显示文件名
   var text = liveText != null ? liveText : (t.id === activeId && ready ? activeText() : t.content || '');
   var lines = text.split('\n');
   for (var i = 0; i < lines.length && i < 10; i++) {
@@ -382,6 +414,7 @@ function applyZoom() {
   document.documentElement.style.setProperty('--code-zoom', String(zoomFactor));
   var reset = document.querySelector('.vditor-ir .vditor-reset');
   if (reset) reset.style.fontSize = (16 * zoomFactor) + 'px';
+  syncCodeTools();
 }
 window.addEventListener('wheel', function (e) {
   if (!e.ctrlKey) return;
@@ -390,16 +423,36 @@ window.addEventListener('wheel', function (e) {
   applyZoom();
 }, { passive: false });
 
+/* ---------- 代码模式工具栏 ---------- */
+function syncCodeTools() {
+  var ws = $('ct-ws'), wr = $('ct-wrap'), zm = $('ct-zoom');
+  if (!ws) return;
+  ws.classList.toggle('on', uiWs);
+  wr.classList.toggle('on', uiWrap);
+  zm.textContent = Math.round(zoomFactor * 100) + '%';
+}
+$('ct-ws').addEventListener('click', function () { ACTIONS['toggle-ws'](); });
+$('ct-wrap').addEventListener('click', function () { ACTIONS['toggle-wrap'](); });
+$('ct-qs').addEventListener('click', function () { lineTool('s'); });
+$('ct-qd').addEventListener('click', function () { lineTool('d'); });
+$('ct-qn').addEventListener('click', function () { lineTool('n'); });
+$('ct-split').addEventListener('click', function () { lineTool('split'); });
+$('ct-find').addEventListener('click', function () { openFind(true); });
+$('ct-zoom-in').addEventListener('click', function () { zoomFactor = Math.min(3, zoomFactor * 1.1); applyZoom(); });
+$('ct-zoom-out').addEventListener('click', function () { zoomFactor = Math.max(0.5, zoomFactor / 1.1); applyZoom(); });
+
 /* ---------- 视图开关：显示空白 / 自动换行 ---------- */
 function applyWs() {
   localStorage.setItem('mde:ws', uiWs ? '1' : '0');
   if (cmView && cmWsComp) cmView.dispatch({ effects: cmWsComp.reconfigure(uiWs ? [CM6.highlightWhitespace(), CM6.highlightTrailingWhitespace()] : []) });
+  syncCodeTools();
 }
 function applyWrap() {
   localStorage.setItem('mde:wrap', uiWrap ? '1' : '0');
   document.body.classList.toggle('md-nowrap', !uiWrap);
   if (cmView && cmWrapComp) cmView.dispatch({ effects: cmWrapComp.reconfigure(uiWrap ? CM6.EditorView.lineWrapping : []) });
   if (cmView) setTimeout(function () { cmView.requestMeasure(); }, 0);
+  syncCodeTools();
 }
 function syncUiMenu() {
   if (window.desktop) window.desktop.uiState({ ws: uiWs, wrap: uiWrap });

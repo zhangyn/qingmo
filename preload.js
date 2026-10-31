@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('desktop', {
   confirm: (opts) => ipcRenderer.invoke('app:confirm', opts),
   print: () => ipcRenderer.send('win:print'),
   editCmd: (cmd) => ipcRenderer.send('edit:cmd', cmd),
+  uiState: (st) => ipcRenderer.send('ui:state', st),
   setTitle: (t) => ipcRenderer.send('title:set', t),
   setDirty: (v) => ipcRenderer.send('dirty:set', v),
   onMenu: (fn) => ipcRenderer.on('menu', (e, action) => fn(action))

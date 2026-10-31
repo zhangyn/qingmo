@@ -109,15 +109,18 @@
   body.dark #cmhost .cm-gutters { background: #1e2028; }
   body.dark #cmhost .cm-activeLine { background: rgba(255,255,255,.05); }
   body.dark #cmhost .cm-activeLineGutter { background: rgba(255,255,255,.05); }
-  #cmhost .cm-highlightSpace { background: rgba(127,127,127,.14); }
-  #cmhost .cm-highlightSpace::before { color: rgba(127,127,127,.65); }
+  #cmhost .cm-highlightSpace { background: rgba(255, 170, 0, .18); }
+  #cmhost .cm-highlightSpace::before { color: #e0962f; }
+  #cmhost .cm-highlightSpace { text-decoration: none; }
   /* md 模式关闭自动换行 */
   body.md-nowrap .vditor-ir .vditor-reset { white-space: pre; overflow-x: auto; }
-  /* !important 必须保留：vditor 初始化时会给容器写内联 height:auto，普通 CSS 压不过它
-     （vditor 的根元素就是 #editor 本身，会加上 .vditor 类） */
-  #editor { height: 100% !important; overflow: hidden; }
+  /* !important 必须保留：vditor 初始化时会给容器写内联 height:auto/width:auto/
+     display:block，全部要压回 flex 布局（vditor 的根元素就是 #editor 本身） */
+  #editor { height: 100% !important; display: flex !important; flex-direction: column; overflow: hidden; }
   #editor .vditor-content { min-height: 0; overflow: hidden; }
   #editor .vditor-ir { overflow-y: auto; min-height: 0; }
+  /* md 内容从左侧开始（覆盖内核默认的 25% 居中窄栏） */
+  #editor .vditor-ir .vditor-reset { padding: 14px 28px !important; margin: 0 !important; max-width: none !important; }
   #toast {
     position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
     background: rgba(30,30,30,.85); color: #fff; padding: 8px 18px;
@@ -157,6 +160,8 @@
   <button data-act="open" title="Ctrl+O">打开</button>
   <button data-act="save" title="Ctrl+S">保存</button>
   <button data-act="saveas" title="Ctrl+Shift+S">另存为</button>
+  <span class="sep"></span>
+  <button data-act="linetools" title="合并/拆分行（代码模式）">行工具 ▾</button>
   <span class="sep"></span>
   <button data-act="pdf">导出 PDF</button>
   <button data-act="exporthtml">导出 HTML</button>
@@ -1307,7 +1312,10 @@ function applyTheme() {
 var ACTIONS = {
   new: newFile, open: openFile, save: save, saveas: saveAs,
   closetab: function () { closeTab(activeId); },
-  'toggle-ws': function () { uiWs = !uiWs; applyWs(); syncUiMenu(); },
+  'toggle-ws': function () {
+    if (!isCodeMode()) { toast('显示空白仅代码模式（非 .md 文件）支持'); return; }
+    uiWs = !uiWs; applyWs(); syncUiMenu();
+  },
   'toggle-wrap': function () { uiWrap = !uiWrap; applyWrap(); syncUiMenu(); },
   'line-s': function () { lineTool('s'); },
   'line-d': function () { lineTool('d'); },
@@ -1319,7 +1327,19 @@ var ACTIONS = {
 };
 document.getElementById('menubar').addEventListener('click', function (e) {
   var btn = e.target.closest('button[data-act]');
-  if (btn && ACTIONS[btn.dataset.act]) ACTIONS[btn.dataset.act]();
+  if (!btn) return;
+  if (btn.dataset.act === 'linetools') {
+    if (!isCodeMode()) { toast('行工具请在代码模式（非 .md 文件）下使用'); return; }
+    var r = btn.getBoundingClientRect();
+    showCtx(r.left, r.bottom + 4, [
+      { label: '合并一行(单引号)', fn: function () { lineTool('s'); } },
+      { label: '合并一行(双引号)', fn: function () { lineTool('d'); } },
+      { label: '合并一行(无引号)', fn: function () { lineTool('n'); } },
+      { label: '拆分为多行', fn: function () { lineTool('split'); } }
+    ]);
+    return;
+  }
+  if (ACTIONS[btn.dataset.act]) ACTIONS[btn.dataset.act]();
 });
 $('fallback-open').addEventListener('change', function () {
   var f = this.files[0]; this.value = '';

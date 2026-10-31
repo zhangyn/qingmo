@@ -10,13 +10,9 @@ const FILE_FILTERS = [
 let win = null;
 let isDirty = false;
 let forceClose = false;
-let uiWs = false;      // 显示空白字符
-let uiWrap = true;     // 自动换行
 
 function debugLog() { return path.join(app.getPath('temp'), 'mde-debug.log'); }
 function logLine(s) { try { fs.appendFileSync(debugLog(), s + '\n'); } catch (e) { /* ignore */ } }
-
-function sendMenu(action) { if (win) win.webContents.send('menu', action); }
 
 function createWindow() {
   win = new BrowserWindow({
@@ -64,72 +60,7 @@ function createWindow() {
   win.loadFile('editor.html');
 }
 
-function buildMenu() {
-  const MENU_TMPL = [
-  {
-    label: '文件',
-    submenu: [
-      { label: '新建 Markdown 标签页', accelerator: 'CmdOrCtrl+N', click: () => sendMenu('new') },
-      { label: '新建 代码/文本标签页', accelerator: 'CmdOrCtrl+Alt+N', click: () => sendMenu('newcode') },
-      { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => sendMenu('open') },
-      { type: 'separator' },
-      { label: '保存', accelerator: 'CmdOrCtrl+S', click: () => sendMenu('save') },
-      { label: '另存为…', accelerator: 'CmdOrCtrl+Shift+S', click: () => sendMenu('saveas') },
-      { label: '关闭标签页', accelerator: 'CmdOrCtrl+W', click: () => sendMenu('closetab') },
-      { type: 'separator' },
-      { label: '导出 PDF…', click: () => sendMenu('pdf') },
-      { label: '导出 HTML…', click: () => sendMenu('exporthtml') },
-      { label: '打印…', accelerator: 'CmdOrCtrl+P', click: () => { if (win) win.webContents.print({}); } },
-      { type: 'separator' },
-      { label: '退出', role: 'quit' }
-    ]
-  },
-  {
-    label: '编辑',
-    submenu: [
-      { label: '撤销', role: 'undo' },
-      { label: '重做', role: 'redo' },
-      { type: 'separator' },
-      { label: '剪切', role: 'cut' },
-      { label: '复制', role: 'copy' },
-      { label: '粘贴', role: 'paste' },
-      { label: '全选', role: 'selectAll' }
-    ]
-  },
-  {
-    label: '视图',
-    submenu: [
-      { label: '放大', role: 'zoomIn' },
-      { label: '缩小', role: 'zoomOut' },
-      { label: '重置缩放', role: 'resetZoom' },
-      { type: 'separator' },
-      { label: '显示空白字符', type: 'checkbox', checked: uiWs, click: () => sendMenu('toggle-ws') },
-      { label: '自动换行', type: 'checkbox', checked: uiWrap, click: () => sendMenu('toggle-wrap') },
-      { type: 'separator' },
-      { label: '全屏', role: 'togglefullscreen' }
-    ]
-  },
-  {
-    label: '帮助',
-    submenu: [
-      {
-        label: '使用说明',
-        click: () => shell.openPath(path.join(path.dirname(process.execPath), '使用说明.txt'))
-      },
-      {
-        label: '关于',
-        click: () => dialog.showMessageBox(win, {
-          type: 'info',
-          title: '关于',
-          message: 'MD 编辑器 1.1',
-          detail: '基于 Vditor 内核的本地 Markdown 编辑器\n免费、离线、不联网'
-        })
-      }
-    ]
-  }
-  ];
-  return MENU_TMPL;
-}
+
 
 /* ---------- IPC ---------- */
 ipcMain.handle('file:open', async () => {
@@ -225,13 +156,11 @@ ipcMain.on('edit:cmd', (e, cmd) => {
 });
 ipcMain.on('title:set', (e, t) => { if (win) win.setTitle(t || 'MD 编辑器'); });
 ipcMain.on('dirty:set', (e, v) => { isDirty = !!v; });
-ipcMain.on('ui:state', (e, st) => {
-  const ws = !!(st && st.ws), wrap = !!(st && st.wrap);
-  if (ws !== uiWs || wrap !== uiWrap) { uiWs = ws; uiWrap = wrap; Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenu())); }
-});
+ipcMain.on('app:help', () => { shell.openPath(path.join(path.dirname(process.execPath), '使用说明.txt')); });
+ipcMain.on('win:fullscreen', () => { if (win) win.setFullScreen(!win.isFullScreen()); });
 
 app.whenReady().then(() => {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenu()));
+  Menu.setApplicationMenu(null);   // 无原生菜单：所有入口在页面内，快捷键由页面层处理
   createWindow();
 });
 

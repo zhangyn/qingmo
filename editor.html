@@ -109,6 +109,10 @@
   body.dark #cmhost .cm-gutters { background: #1e2028; }
   body.dark #cmhost .cm-activeLine { background: rgba(255,255,255,.05); }
   body.dark #cmhost .cm-activeLineGutter { background: rgba(255,255,255,.05); }
+  #cmhost .cm-highlightSpace { background: rgba(127,127,127,.14); }
+  #cmhost .cm-highlightSpace::before { color: rgba(127,127,127,.65); }
+  /* md 模式关闭自动换行 */
+  body.md-nowrap .vditor-ir .vditor-reset { white-space: pre; overflow-x: auto; }
   /* !important 必须保留：vditor 初始化时会给容器写内联 height:auto，普通 CSS 压不过它
      （vditor 的根元素就是 #editor 本身，会加上 .vditor 类） */
   #editor { height: 100% !important; overflow: hidden; }
@@ -171,12 +175,15 @@
       <button id="find-prev" title="上一个 (Shift+Enter)">↑</button>
       <button id="find-next" title="下一个 (Enter)">↓</button>
       <button id="find-case" title="区分大小写">Aa</button>
+      <button id="find-regex" title="正则表达式">.*</button>
       <button id="find-close" title="关闭 (Esc)">✕</button>
     </div>
     <div class="find-row" id="replace-row" style="display:none">
       <input id="replace-input" placeholder="替换为…" spellcheck="false">
       <button id="repl-one">替换</button>
       <button id="repl-all">全部</button>
+      <button id="repl-ls" title="把替换框内容插入到每一行行首">行首</button>
+      <button id="repl-le" title="把替换框内容追加到每一行行尾">行尾</button>
     </div>
   </div>
   <div id="editor"></div>
@@ -196,9 +203,13 @@ var ready = false;
 var dark = localStorage.getItem('mde:dark') === '1';
 var cmView = null;          // 代码模式编辑器（CodeMirror 6）
 var cmLangComp = null;
+var cmWsComp = null;        // 显示空白
+var cmWrapComp = null;      // 自动换行
 var editorKind = 'md';      // 'md' | 'code'
 var zoomFactor = parseFloat(localStorage.getItem('mde:zoom')) || 1;
 var lastEditAt = 0;
+var uiWs = localStorage.getItem('mde:ws') === '1';
+var uiWrap = localStorage.getItem('mde:wrap') !== '0';   // 默认开
 
 /* ---------- 多标签页模型 ---------- */
 var tabs = [];            // { id, name, path(桌面版), fh(网页版句柄), content, dirty, scroll }
@@ -301,6 +312,8 @@ function setDirty(v) {
 function cmEnsure(t) {
   if (cmView) return cmView;
   cmLangComp = new CM6.Compartment();
+  cmWsComp = new CM6.Compartment();
+  cmWrapComp = new CM6.Compartment();
   cmView = new CM6.EditorView({
     doc: '',
     parent: $('cmhost'),
@@ -314,9 +327,12 @@ function cmEnsure(t) {
       CM6.foldGutter(),
       CM6.history(),
       CM6.keymap.of([CM6.defaultKeymap, CM6.historyKeymap, CM6.foldKeymap, CM6.indentWithTab]),
+      CM6.keymap.of(LINE_KEYMAP),
       CM6.search(),
       CM6.highlightSelectionMatches(),
       CM6.syntaxHighlighting(CM6.defaultHighlightStyle, { fallback: true }),
+      cmWsComp.of(uiWs ? [CM6.highlightWhitespace(), CM6.highlightTrailingWhitespace()] : []),
+      cmWrapComp.of(uiWrap ? CM6.EditorView.lineWrapping : []),
       cmLangComp.of(t && t.lang && CM6.langs[t.lang] ? CM6.langs[t.lang]() : []),
       CM6.EditorView.updateListener.of(function (u) {
         if (u.docChanged && ready) {
@@ -367,6 +383,73 @@ window.addEventListener('wheel', function (e) {
   zoomFactor = Math.min(3, Math.max(0.5, zoomFactor * (e.deltaY < 0 ? 1.08 : 1 / 1.08)));
   applyZoom();
 }, { passive: false });
+
+/* ---------- 视图开关：显示空白 / 自动换行 ---------- */
+function applyWs() {
+  localStorage.setItem('mde:ws', uiWs ? '1' : '0');
+  if (cmView && cmWsComp) cmView.dispatch({ effects: cmWsComp.reconfigure(uiWs ? [CM6.highlightWhitespace(), CM6.highlightTrailingWhitespace()] : []) });
+}
+function applyWrap() {
+  localStorage.setItem('mde:wrap', uiWrap ? '1' : '0');
+  document.body.classList.toggle('md-nowrap', !uiWrap);
+  if (cmView && cmWrapComp) cmView.dispatch({ effects: cmWrapComp.reconfigure(uiWrap ? CM6.EditorView.lineWrapping : []) });
+  if (cmView) setTimeout(function () { cmView.requestMeasure(); }, 0);
+}
+function syncUiMenu() {
+  if (window.desktop) window.desktop.uiState({ ws: uiWs, wrap: uiWrap });
+}
+
+/* ---------- 行快捷键（EditPlus 式） ---------- */
+function cmdCopyLine(view) {
+  var line = view.state.doc.lineAt(view.state.selection.main.head);
+  view.dispatch({ selection: { anchor: line.from, head: line.to } });
+  document.execCommand('copy');
+  view.dispatch({ selection: { anchor: view.state.selection.main.head } });
+  toast('已复制当前行');
+  return true;
+}
+function cmdCutLine(view) {
+  var line = view.state.doc.lineAt(view.state.selection.main.head);
+  var to = Math.min(line.to + 1, view.state.doc.length);   // 连同换行一起剪
+  view.dispatch({ selection: { anchor: line.from, head: to } });
+  document.execCommand('cut');
+  return true;
+}
+var LINE_KEYMAP = [
+  { key: 'Ctrl-y', run: function (v) { CM6.deleteLine(v); return true; } },
+  { key: 'Ctrl-d', run: function (v) { CM6.copyLineDown(v); return true; } },
+  { key: 'Alt-ArrowUp', run: function (v) { CM6.moveLineUp(v); return true; } },
+  { key: 'Alt-ArrowDown', run: function (v) { CM6.moveLineDown(v); return true; } },
+  { key: 'Ctrl-c', run: function (v) { if (!v.state.selection.main.empty) return false; return cmdCopyLine(v); } },
+  { key: 'Ctrl-x', run: function (v) { if (!v.state.selection.main.empty) return false; return cmdCutLine(v); } }
+];
+
+/* ---------- 行工具：合并/拆分（多行单号 → SQL/接口参数） ---------- */
+function lineTool(op) {
+  if (!isCodeMode()) { toast('行工具请在代码模式（非 .md 文件）下使用'); return; }
+  var sel = cmView.state.selection.main;
+  var hasSel = sel.from !== sel.to;
+  var l = cmView.state.doc.lineAt(sel.from);
+  var r = cmView.state.doc.lineAt(sel.to);
+  var from = hasSel ? l.from : 0;                       // 未选中：处理整个文档
+  var to = hasSel ? r.to : cmView.state.doc.length;
+  var seg = cmView.state.doc.sliceString(from, to);
+  var lines = seg.split('\n').map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
+  var out, tip;
+  if (op === 'split') {
+    out = lines.join('\n').split(/[,，;；\t]/)
+      .map(function (x) { return x.replace(/^['"\s]+|['"\s]+$/g, ''); })
+      .filter(function (x) { return x !== ''; }).join('\n');
+    tip = '已拆分为多行';
+  } else {
+    var q = op === 's' ? "'" : (op === 'd' ? '"' : '');
+    out = lines.map(function (x) { return q + x + q; }).join(',');
+    tip = '已合并为一行（' + (op === 's' ? '单引号' : op === 'd' ? '双引号' : '无引号') + '）';
+  }
+  cmView.dispatch({ changes: { from: from, to: to, insert: out } });
+  setDirty(true);
+  toast(tip);
+}
 
 /* ---------- 草稿 ---------- */
 function readDraft(id) {
@@ -821,6 +904,11 @@ window.addEventListener('contextmenu', function (e) {
       { sep: true },
       { label: '全选', fn: function () { if (window.desktop) window.desktop.editCmd('selectAll'); } },
       { sep: true },
+      { label: '合并一行(单引号)', fn: function () { lineTool('s'); } },
+      { label: '合并一行(双引号)', fn: function () { lineTool('d'); } },
+      { label: '合并一行(无引号)', fn: function () { lineTool('n'); } },
+      { label: '拆分为多行', fn: function () { lineTool('split'); } },
+      { sep: true },
       { label: '查找替换', fn: function () { openFind(true); } }
     ]);
     return;
@@ -842,8 +930,19 @@ window.addEventListener('contextmenu', function (e) {
 });
 
 /* ---------- 查找与替换 ---------- */
-var findState = { query: '', caseSensitive: false, ranges: [], idx: -1, open: false, replaceVisible: false };
+var findState = { query: '', caseSensitive: false, regex: false, lineEdge: '', ranges: [], idx: -1, open: false, replaceVisible: false };
 function findBarEl() { return $('findbar'); }
+function findRegex() {
+  try { return new RegExp(findState.query, 'g' + (findState.caseSensitive ? '' : 'i')); }
+  catch (e) { $('find-count').textContent = '正则无效'; return null; }
+}
+function applyLineEdge(mode) {
+  var ins = $('replace-input').value;
+  var lines = activeText().split('\n').map(function (L) { return mode === 'start' ? ins + L : L + ins; });
+  setEditorText(lines.join('\n'));
+  setDirty(true);
+  toast(mode === 'start' ? '已插入到每行行首' : '已追加到每行行尾');
+}
 
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function countOccurrences(text, needle, caseSensitive) {
@@ -874,6 +973,23 @@ function closeFind() {
   if (isCodeMode() && cmView) cmView.dispatch({ effects: CM6.setSearchQuery.of(new CM6.SearchQuery({ search: '' })) });
   clearSearchHighlights();
 }
+function syncLineEdgeBtns() {
+  $('repl-ls').classList.toggle('on', findState.lineEdge === 'start');
+  $('repl-le').classList.toggle('on', findState.lineEdge === 'end');
+}
+$('find-regex').addEventListener('click', function () {
+  findState.regex = !findState.regex;
+  this.classList.toggle('on', findState.regex);
+  runSearch(true);
+});
+$('repl-ls').addEventListener('click', function () {
+  findState.lineEdge = findState.lineEdge === 'start' ? '' : 'start';
+  syncLineEdgeBtns();
+});
+$('repl-le').addEventListener('click', function () {
+  findState.lineEdge = findState.lineEdge === 'end' ? '' : 'end';
+  syncLineEdgeBtns();
+});
 /* 把编辑器文本按块级元素分段（匹配不允许跨块），返回每段的文本与文本节点索引 */
 function collectSegments(root) {
   var segs = [];
@@ -910,9 +1026,14 @@ function runSearch(keepNearCaret) {
     findState.ranges = [];
     findState.idx = -1;
     if (cmView) {
-      var query = new CM6.SearchQuery({ search: q, caseSensitive: findState.caseSensitive, replace: $('replace-input').value });
+      var query = new CM6.SearchQuery({ search: q, caseSensitive: findState.caseSensitive, regexp: findState.regex, replace: $('replace-input').value });
       cmView.dispatch({ effects: CM6.setSearchQuery.of(query) });
-      findState.cmCount = countOccurrences(cmView.state.doc.toString(), q, findState.caseSensitive);
+      if (findState.regex && q) {
+        var re = findRegex();
+        findState.cmCount = re ? (cmView.state.doc.toString().match(re) || []).length : 0;
+      } else {
+        findState.cmCount = countOccurrences(cmView.state.doc.toString(), q, findState.caseSensitive);
+      }
       findState.cmPos = q ? 1 : 0;
     } else { findState.cmCount = 0; findState.cmPos = 0; }
     $('find-count').textContent = q ? findState.cmCount + ' 处' : '0/0';
@@ -922,13 +1043,27 @@ function runSearch(keepNearCaret) {
   var root = document.querySelector('.vditor-ir .vditor-reset');   // 页面有多个 .vditor-reset（含隐藏模板），只取编辑区那个
   if (q && root) {
     var segs = collectSegments(root);
-    var needle = findState.caseSensitive ? q : q.toLowerCase();
+    var re = null;
+    if (findState.regex) {
+      re = findRegex();
+      if (!re) return;
+    }
     segs.forEach(function (seg) {
-      var hay = findState.caseSensitive ? seg.text : seg.text.toLowerCase();
-      var pos = 0;
-      while ((pos = hay.indexOf(needle, pos)) >= 0) {
-        findState.ranges.push(offsetToRange(seg, pos, pos + q.length));
-        pos += q.length;
+      if (re) {
+        re.lastIndex = 0;
+        var m;
+        while ((m = re.exec(seg.text))) {
+          if (!m[0].length) { re.lastIndex++; continue; }
+          findState.ranges.push(offsetToRange(seg, m.index, m.index + m[0].length));
+        }
+      } else {
+        var needle = findState.caseSensitive ? q : q.toLowerCase();
+        var hay = findState.caseSensitive ? seg.text : seg.text.toLowerCase();
+        var pos = 0;
+        while ((pos = hay.indexOf(needle, pos)) >= 0) {
+          findState.ranges.push(offsetToRange(seg, pos, pos + q.length));
+          pos += q.length;
+        }
       }
     });
   }
@@ -1034,13 +1169,23 @@ function vdSyncCaret(el) {
   reset.dispatchEvent(new Event('input', { bubbles: true }));
 }
 function replaceCurrent() {
+  if (findState.lineEdge) { applyLineEdge(findState.lineEdge); return; }
   if (isCodeMode() && cmView) {
-    var query = new CM6.SearchQuery({ search: findState.query, caseSensitive: findState.caseSensitive, replace: $('replace-input').value });
+    var query = new CM6.SearchQuery({ search: findState.query, caseSensitive: findState.caseSensitive, regexp: findState.regex, replace: $('replace-input').value });
     cmView.dispatch({ effects: CM6.setSearchQuery.of(query) });
     CM6.findNext(cmView);      // 先让光标落在匹配上，replaceNext 才会生效
     CM6.replaceNext(cmView);
     cmSyncPos(); drawSearch();
     return;
+  }
+  if (findState.regex) {       // md 模式正则：替换文档中第一处匹配
+    var textR = activeText();
+    var re1 = new RegExp(findState.query, findState.caseSensitive ? '' : 'i');
+    var m1 = re1.exec(textR);
+    if (!m1) { toast('没有找到匹配'); return; }
+    var rep1 = $('replace-input').value.replace(/\$(\d)/g, function (_, d) { return m1[Number(d)] != null ? m1[Number(d)] : ''; });
+    setEditorText(textR.slice(0, m1.index) + rep1 + textR.slice(m1.index + m1[0].length));
+    setDirty(true); runSearch(true); toast('已替换 1 处'); return;
   }
   if (!findState.ranges.length || findState.idx < 0) return;
   var rg = findState.ranges[findState.idx];
@@ -1059,12 +1204,19 @@ function replaceCurrent() {
 }
 function replaceAll() {
   var q = $('find-input').value;
+  if (findState.lineEdge) { applyLineEdge(findState.lineEdge); return; }
   if (!q) return;
   var md = activeText();
-  var re = new RegExp(escapeRegExp(q), findState.caseSensitive ? 'g' : 'gi');
+  var re, rep;
+  if (findState.regex) {
+    try { re = new RegExp(q, 'g' + (findState.caseSensitive ? '' : 'i')); } catch (e) { toast('正则表达式无效'); return; }
+    rep = $('replace-input').value;
+  } else {
+    re = new RegExp(escapeRegExp(q), findState.caseSensitive ? 'g' : 'gi');
+    rep = $('replace-input').value.replace(/\$/g, '$$$$');
+  }
   var n = (md.match(re) || []).length;
   if (!n) { toast('没有找到「' + q + '」'); return; }
-  var rep = $('replace-input').value.replace(/\$/g, '$$$$');
   var newMd = md.replace(re, rep);
   var sc = isCodeMode() ? document.querySelector('#cmhost .cm-scroller') : document.querySelector('.vditor-ir');
   var st = sc ? sc.scrollTop : 0;
@@ -1155,6 +1307,12 @@ function applyTheme() {
 var ACTIONS = {
   new: newFile, open: openFile, save: save, saveas: saveAs,
   closetab: function () { closeTab(activeId); },
+  'toggle-ws': function () { uiWs = !uiWs; applyWs(); syncUiMenu(); },
+  'toggle-wrap': function () { uiWrap = !uiWrap; applyWrap(); syncUiMenu(); },
+  'line-s': function () { lineTool('s'); },
+  'line-d': function () { lineTool('d'); },
+  'line-n': function () { lineTool('n'); },
+  'line-split': function () { lineTool('split'); },
   exporthtml: exportHtml, pdf: exportPdf,
   print: function () { if (window.desktop) { window.desktop.print(); } else { printPdf(); } },
   theme: function () { dark = !dark; applyTheme(); }
@@ -1207,6 +1365,7 @@ vditor = new Vditor('editor', {
   after: function () {
     ready = true;
     restoreSession();
+    applyWs(); applyWrap(); syncUiMenu();
   }
 });
 }

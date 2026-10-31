@@ -10,6 +10,8 @@ const FILE_FILTERS = [
 let win = null;
 let isDirty = false;
 let forceClose = false;
+let uiWs = false;      // 显示空白字符
+let uiWrap = true;     // 自动换行
 
 function debugLog() { return path.join(app.getPath('temp'), 'mde-debug.log'); }
 function logLine(s) { try { fs.appendFileSync(debugLog(), s + '\n'); } catch (e) { /* ignore */ } }
@@ -62,7 +64,8 @@ function createWindow() {
   win.loadFile('editor.html');
 }
 
-const MENU_TMPL = [
+function buildMenu() {
+  const MENU_TMPL = [
   {
     label: '文件',
     submenu: [
@@ -89,7 +92,14 @@ const MENU_TMPL = [
       { label: '剪切', role: 'cut' },
       { label: '复制', role: 'copy' },
       { label: '粘贴', role: 'paste' },
-      { label: '全选', role: 'selectAll' }
+      { label: '全选', role: 'selectAll' },
+      { type: 'separator' },
+      { label: '行工具', submenu: [
+        { label: '合并为一行（单引号）', click: () => sendMenu('line-s') },
+        { label: '合并为一行（双引号）', click: () => sendMenu('line-d') },
+        { label: '合并为一行（无引号）', click: () => sendMenu('line-n') },
+        { label: '拆分为多行', click: () => sendMenu('line-split') }
+      ] }
     ]
   },
   {
@@ -98,6 +108,9 @@ const MENU_TMPL = [
       { label: '放大', role: 'zoomIn' },
       { label: '缩小', role: 'zoomOut' },
       { label: '重置缩放', role: 'resetZoom' },
+      { type: 'separator' },
+      { label: '显示空白字符', type: 'checkbox', checked: uiWs, click: () => sendMenu('toggle-ws') },
+      { label: '自动换行', type: 'checkbox', checked: uiWrap, click: () => sendMenu('toggle-wrap') },
       { type: 'separator' },
       { label: '全屏', role: 'togglefullscreen' }
     ]
@@ -120,7 +133,9 @@ const MENU_TMPL = [
       }
     ]
   }
-];
+  ];
+  return MENU_TMPL;
+}
 
 /* ---------- IPC ---------- */
 ipcMain.handle('file:open', async () => {
@@ -216,9 +231,13 @@ ipcMain.on('edit:cmd', (e, cmd) => {
 });
 ipcMain.on('title:set', (e, t) => { if (win) win.setTitle(t || 'MD 编辑器'); });
 ipcMain.on('dirty:set', (e, v) => { isDirty = !!v; });
+ipcMain.on('ui:state', (e, st) => {
+  const ws = !!(st && st.ws), wrap = !!(st && st.wrap);
+  if (ws !== uiWs || wrap !== uiWrap) { uiWs = ws; uiWrap = wrap; Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenu())); }
+});
 
 app.whenReady().then(() => {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(MENU_TMPL));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenu()));
   createWindow();
 });
 

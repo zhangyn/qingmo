@@ -60,6 +60,7 @@ function createWindow() {
     minWidth: 620,
     minHeight: 440,
     title: 'MD 编辑器',
+    icon: path.join(__dirname, 'app.ico'),
     backgroundColor: '#f8f9fb',
     show: false,
     webPreferences: {

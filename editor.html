@@ -201,6 +201,7 @@
     <button id="ct-qd" title="合并为一行：双引号包裹，逗号分隔">"合并</button>
     <button id="ct-qn" title="合并为一行：逗号分隔">合并</button>
     <button id="ct-split" title="按逗号/分号拆分为多行，自动去引号">拆分</button>
+    <button id="ct-json" title="格式化 JSON（未选中：整个文件；选中：仅选中部分）">JSON格式化</button>
     <span class="sep"></span>
     <button id="ct-find" title="查找替换 (Ctrl+H)">查找替换</button>
     <span class="spacer"></span>
@@ -441,6 +442,20 @@ function syncCodeTools() {
   wr.classList.toggle('on', uiWrap);
   zm.textContent = Math.round(zoomFactor * 100) + '%';
 }
+function jsonFormat() {
+  if (!isCodeMode()) { toast('JSON 格式化请在代码模式使用'); return; }
+  var sel = cmView.state.selection.main;
+  var hasSel = sel.from !== sel.to;
+  var text = cmView.state.doc.sliceString(hasSel ? sel.from : 0, hasSel ? sel.to : cmView.state.doc.length);
+  var parsed;
+  try { parsed = JSON.parse(text); } catch (e) { toast('JSON 解析失败：' + e.message); return; }
+  var out = JSON.stringify(parsed, null, 2);
+  if (hasSel) cmView.dispatch({ changes: { from: sel.from, to: sel.to, insert: out } });
+  else setEditorText(out);
+  setDirty(true);
+  toast('JSON 已格式化');
+}
+$('ct-json').addEventListener('click', function () { jsonFormat(); });
 $('ct-ws').addEventListener('click', function () { ACTIONS['toggle-ws'](); });
 $('ct-wrap').addEventListener('click', function () { ACTIONS['toggle-wrap'](); });
 $('ct-qs').addEventListener('click', function () { lineTool('s'); });

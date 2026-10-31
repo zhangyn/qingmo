@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# 日志与临时文件
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Electron 运行时与打包产物（不入库，见 README 组装说明）
+electron-v*.zip
+electron/
+out/

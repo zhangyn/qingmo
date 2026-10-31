@@ -36,6 +36,8 @@
 | 下一个 / 上一个匹配 | `Enter` / `Shift+Enter`（或 `F3` / `Shift+F3`） |
 | 打印 | `Ctrl+P` |
 | 全屏 | `F11` |
+| 打印 | `Ctrl+P` |
+| 缩放 | `Ctrl+滚轮` 或 `Ctrl+=` / `Ctrl+-` |
 | 明暗主题 | 右上角 🌙/☀️ |
 
 ## 目录结构
@@ -44,8 +46,8 @@
 md-editor/
 ├── editor.html      渲染层页面（桌面版与网页版共用）：标签页、查找替换、
 │                    右键菜单、草稿/会话恢复、主题等全部界面逻辑
-├── main.js          Electron 主进程：窗口、原生菜单、文件对话框、
-│                    PDF 导出、关闭确认
+├── main.js          Electron 主进程：窗口、文件对话框、
+│                    PDF 导出、关闭确认（无原生菜单，入口全在页面内）
 ├── preload.js       渲染层 ↔ 主进程的安全桥接（contextBridge）
 ├── package.json     应用清单（main 入口）
 ├── cm6.js           CodeMirror 6 内核（esbuild 打包，含 Java/SQL/JSON/XML/

@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MD 编辑器</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234e6ef2'/%3E%3Ctext x='16' y='23' font-size='18' font-weight='bold' text-anchor='middle' fill='white' font-family='sans-serif'%3EM%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="./dist/index.css">
+<style>
+  :root {
+    --bar-bg: #ffffff; --bar-fg: #333; --bar-border: #e0e0e0;
+    --btn-hover: #f0f0f0; --accent: #4e6ef2;
+  }
+  body.dark {
+    --bar-bg: #1e2028; --bar-fg: #d0d0d0; --bar-border: #33353f;
+    --btn-hover: #2c2f3a; --accent: #7ea0ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column; overflow: hidden;
+    font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bar-bg); color: var(--bar-fg);
+  }
+  #menubar {
+    display: flex; align-items: center; gap: 2px;
+    padding: 4px 10px; border-bottom: 1px solid var(--bar-border);
+    background: var(--bar-bg); flex-shrink: 0; user-select: none;
+  }
+  #menubar button {
+    border: none; background: transparent; color: var(--bar-fg);
+    padding: 5px 9px; border-radius: 5px; cursor: pointer; font-size: 13px;
+  }
+  #menubar button:hover { background: var(--btn-hover); }
+  .sep { width: 1px; height: 16px; background: var(--bar-border); margin: 0 6px; }
+  .spacer { flex: 1; }
+  #savestate { font-size: 12px; opacity: .6; padding: 0 8px; }
+
+  /* ---- 多标签页 ---- */
+  #tabbar {
+    display: flex; align-items: flex-end; gap: 2px;
+    padding: 5px 8px 0; background: var(--bar-bg);
+    border-bottom: 1px solid var(--bar-border);
+    overflow-x: auto; flex-shrink: 0; user-select: none;
+  }
+  #tabbar::-webkit-scrollbar { height: 4px; }
+  .tab {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 8px 5px 12px; max-width: 190px;
+    border: 1px solid transparent; border-bottom: none;
+    border-radius: 6px 6px 0 0; cursor: pointer;
+    font-size: 13px; color: var(--bar-fg); flex-shrink: 0;
+  }
+  .tab:hover { background: var(--btn-hover); }
+  .tab.active {
+    background: var(--bar-bg); border-color: var(--bar-border);
+    position: relative; top: 1px;
+  }
+  .tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab .dot { color: #e6a23c; flex-shrink: 0; }
+  .tab .x {
+    opacity: .45; padding: 0 4px; border-radius: 3px;
+    font-size: 14px; line-height: 1; flex-shrink: 0;
+  }
+  .tab .x:hover { background: var(--btn-hover); opacity: 1; }
+
+  main { flex: 1; min-height: 0; overflow: hidden; position: relative; }
+
+  /* ---- 查找替换 ---- */
+  #findbar {
+    position: absolute; top: 6px; right: 14px; z-index: 90;
+    background: var(--bar-bg); color: var(--bar-fg);
+    border: 1px solid var(--bar-border); border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.15);
+    padding: 6px 8px; display: none; flex-direction: column; gap: 6px;
+    font-size: 13px;
+  }
+  #findbar.show { display: flex; }
+  .find-row { display: flex; align-items: center; gap: 4px; }
+  .find-row input {
+    border: 1px solid var(--bar-border); background: transparent; color: var(--bar-fg);
+    border-radius: 5px; padding: 4px 8px; font-size: 13px; outline: none; width: 200px;
+  }
+  .find-row input:focus { border-color: var(--accent); }
+  .find-row button {
+    border: 1px solid var(--bar-border); background: transparent; color: var(--bar-fg);
+    border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: 12px; min-width: 28px;
+  }
+  .find-row button:hover { background: var(--btn-hover); }
+  .find-row button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #find-count { min-width: 44px; text-align: center; opacity: .65; font-size: 12px; }
+  ::highlight(mde-hits) { background-color: rgba(255, 213, 79, .6); }
+  ::highlight(mde-cur) { background-color: #ff9f43; color: #fff; }
+  /* !important 必须保留：vditor 初始化时会给容器写内联 height:auto，普通 CSS 压不过它
+     （vditor 的根元素就是 #editor 本身，会加上 .vditor 类） */
+  #editor { height: 100% !important; overflow: hidden; }
+  #editor .vditor-content { min-height: 0; overflow: hidden; }
+  #editor .vditor-ir { overflow-y: auto; min-height: 0; }
+  #toast {
+    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    background: rgba(30,30,30,.85); color: #fff; padding: 8px 18px;
+    border-radius: 6px; font-size: 13px; opacity: 0; pointer-events: none;
+    transition: opacity .25s; z-index: 99;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ---- 代码块编辑体验：与 Typora 一致 ---- */
+  /* 编辑时隐藏下方重复出现的渲染层（点击块外后高亮立即生效） */
+  .vditor-ir__node--expand[data-type="code-block"] .vditor-ir__preview { display: none !important; }
+  /* 编辑区底色与渲染层保持一致：去掉聚焦变灰，露出统一的格纹背景 */
+  .vditor-ir pre.vditor-reset:focus,
+  .vditor-ir__node--expand .vditor-ir__marker--pre,
+  .vditor-ir__node--expand .vditor-ir__marker--pre code,
+  .vditor-ir__node--expand[data-type="code-block"] {
+    background-color: transparent !important;
+  }
+
+  /* ---- 右键菜单 ---- */
+  #ctxmenu {
+    position: fixed; display: none; z-index: 1000;
+    background: var(--bar-bg); color: var(--bar-fg);
+    border: 1px solid var(--bar-border); border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.18);
+    padding: 4px; min-width: 150px; font-size: 13px; user-select: none;
+  }
+  .ctx-item { padding: 6px 14px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .ctx-item:hover { background: var(--btn-hover); }
+  .ctx-item.danger:hover { background: #c8524d; color: #fff; }
+  .ctx-sep { height: 1px; background: var(--bar-border); margin: 4px 6px; }
+</style>
+</head>
+<body>
+<header id="menubar">
+  <button data-act="new" title="Ctrl+N">新建</button>
+  <button data-act="open" title="Ctrl+O">打开</button>
+  <button data-act="save" title="Ctrl+S">保存</button>
+  <button data-act="saveas" title="Ctrl+Shift+S">另存为</button>
+  <span class="sep"></span>
+  <button data-act="pdf">导出 PDF</button>
+  <button data-act="exporthtml">导出 HTML</button>
+  <button data-act="print">打印</button>
+  <span class="sep"></span>
+  <button data-act="theme">🌙 暗色</button>
+  <span class="spacer"></span>
+  <span id="savestate"></span>
+</header>
+<div id="tabbar"></div>
+<main>
+  <div id="findbar">
+    <div class="find-row">
+      <input id="find-input" placeholder="查找…" spellcheck="false">
+      <span id="find-count">0/0</span>
+      <button id="find-prev" title="上一个 (Shift+Enter)">↑</button>
+      <button id="find-next" title="下一个 (Enter)">↓</button>
+      <button id="find-case" title="区分大小写">Aa</button>
+      <button id="find-close" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="find-row" id="replace-row" style="display:none">
+      <input id="replace-input" placeholder="替换为…" spellcheck="false">
+      <button id="repl-one">替换</button>
+      <button id="repl-all">全部</button>
+    </div>
+  </div>
+  <div id="editor"></div>
+</main>
+<input type="file" id="fallback-open" accept=".md,.markdown,.txt" hidden>
+<div id="ctxmenu"></div>
+<div id="toast"></div>
+
+<script src="./dist/index.min.js"></script>
+<script>
+'use strict';
+/* ---------- 全局状态 ---------- */
+var vditor = null;
+var ready = false;
+var dark = localStorage.getItem('mde:dark') === '1';
+
+/* ---------- 多标签页模型 ---------- */
+var tabs = [];            // { id, name, path(桌面版), fh(网页版句柄), content, dirty, scroll }
+var activeId = null;
+var tabSeq = 1;
+
+function $ (id) { return document.getElementById(id); }
+function toast(msg) {
+  var t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._tm); toast._tm = setTimeout(function () { t.classList.remove('show'); }, 2200);
+}
+function activeTab() {
+  for (var i = 0; i < tabs.length; i++) if (tabs[i].id === activeId) return tabs[i];
+  return tabs[tabs.length - 1] || null;
+}
+function tabById(id) {
+  for (var i = 0; i < tabs.length; i++) if (tabs[i].id === id) return tabs[i];
+  return null;
+}
+function newTabObj(name, content, path, fh) {
+  return { id: 't' + (tabSeq++), name: name || '未命名', path: path || null, fh: fh || null, content: content || '', dirty: false, scroll: 0 };
+}
+function renderTabs() {
+  var bar = $('tabbar');
+  bar.innerHTML = '';
+  tabs.forEach(function (t) {
+    var d = document.createElement('div');
+    d.className = 'tab' + (t.id === activeId ? ' active' : '');
+    d.title = t.path || t.name;
+    var dot = document.createElement('span');
+    dot.className = 'dot'; dot.textContent = t.dirty ? '●' : '';
+    var nm = document.createElement('span');
+    nm.className = 'name'; nm.textContent = docTitleOf(t);
+    var x = document.createElement('span');
+    x.className = 'x'; x.textContent = '×';
+    x.title = '关闭 (Ctrl+W)';
+    x.addEventListener('click', function (ev) { ev.stopPropagation(); closeTab(t.id); });
+    d.appendChild(dot); d.appendChild(nm); d.appendChild(x);
+    d.addEventListener('click', function () { switchTab(t.id); });
+    bar.appendChild(d);
+  });
+  persistTabs();
+}
+/* 标签标题：取正文第一个非空行（# 标题自动去掉井号），空文档回退到文件名 */
+function docTitleOf(t, liveText) {
+  var text = liveText != null ? liveText : (t.id === activeId && ready ? vditor.getValue() : t.content || '');
+  var lines = text.split('\n');
+  for (var i = 0; i < lines.length && i < 10; i++) {
+    var L = lines[i].trim();
+    if (!L) continue;
+    var m = L.match(/^#{1,6}\s+(.+)$/);
+    var s = (m ? m[1] : L).trim();
+    return (s || t.name).slice(0, 30);
+  }
+  return t.name;
+}
+var labelTimer = null;
+function scheduleLabelRefresh() {
+  if (labelTimer) return;
+  labelTimer = setTimeout(function () {
+    labelTimer = null;
+    var t = activeTab();
+    if (!t || !ready) return;
+    var d = docTitleOf(t, vditor.getValue());
+    var el = document.querySelector('.tab.active .name');
+    if (el && el.textContent !== d) el.textContent = d;
+  }, 400);
+}
+function persistTabs() {
+  try {
+    localStorage.setItem('mde:tabs', JSON.stringify({
+      active: activeId,
+      list: tabs.map(function (t) { return { id: t.id, name: t.name, path: t.path, dirty: t.dirty }; })
+    }));
+  } catch (e) { /* 存储满忽略 */ }
+}
+function setDirty(v) {
+  var t = activeTab(); if (!t) return;
+  if (t.dirty !== v) { t.dirty = v; renderTabs(); }
+  $('savestate').textContent = tabs.some(function (x) { return x.dirty; }) ? '● 未保存' : '';
+  document.title = (v ? '● ' : '') + t.name + ' - MD 编辑器';
+  if (window.desktop) window.desktop.setDirty(tabs.some(function (x) { return x.dirty; }));
+}
+
+/* ---------- 草稿 ---------- */
+function readDraft(id) {
+  try { var raw = localStorage.getItem('mde:draft:' + id); return raw ? JSON.parse(raw) : null; }
+  catch (e) { return null; }
+}
+function writeDraft(t, content) {
+  try { localStorage.setItem('mde:draft:' + t.id, JSON.stringify({ t: content, at: Date.now() })); } catch (e) {}
+}
+function clearDraft(id) { try { localStorage.removeItem('mde:draft:' + id); } catch (e) {} }
+setInterval(function () {
+  var t = activeTab();
+  if (ready && t && t.dirty) writeDraft(t, vditor.getValue());
+}, 10000);
+
+/* ---------- 欢迎文档 ---------- */
+var WELCOME = [
+'# 欢迎使用 MD 编辑器 ✨',
+'',
+'这是一个**免费、离线可用**的 Markdown 编辑器，写作方式与 Typora 一样：',
+'**输入即渲染**，不需要左右分栏预览。',
+'',
+'> 用顶部菜单「打开」加载 `.md` 文件，`Ctrl+S` 直接保存回原文件。',
+'> 支持多标签页：可同时打开多个文件，`Ctrl+W` 关闭当前标签。',
+'> 未保存的修改会自动存入草稿，意外关闭也能恢复。',
+'',
+'## 常用语法速览',
+'',
+'- 无序列表项',
+'1. 有序列表项',
+'- [x] 任务清单（已完成）',
+'- [ ] 任务清单（未完成）',
+'',
+'**加粗**、*斜体*、~~删除线~~、`行内代码`、[链接](https://github.com)',
+'',
+'### 表格',
+'',
+'右键点击表格可插入/删除行和列。',
+'',
+'| 功能 | 快捷键 |',
+'| --- | --- |',
+'| 保存 | Ctrl + S |',
+'| 打开 | Ctrl + O |',
+'',
+'### 代码块',
+'',
+'```python',
+'def hello(name: str) -> str:',
+'    return f"你好, {name}!"',
+'```',
+'',
+'### 数学公式',
+'',
+'$$',
+'E = mc^2, \\quad e^{i\\pi} + 1 = 0',
+'$$',
+'',
+'### 图表（Mermaid）',
+'',
+'```mermaid',
+'graph LR;',
+'  A[写作] --> B{满意?};',
+'  B -- 是 --> C[发布];',
+'  B -- 否 --> A;',
+'```',
+'',
+'*开始写作吧！右上角 🌙 可切换暗色主题。*',
+''
+].join('\n');
+
+/* ---------- 标签页操作 ---------- */
+function cacheActive() {
+  var cur = activeTab();
+  if (!cur || !ready) return;
+  cur.content = vditor.getValue();
+  if (cur.dirty) writeDraft(cur, cur.content);
+  var irEl = document.querySelector('.vditor-ir');
+  if (irEl) cur.scroll = irEl.scrollTop;
+}
+async function activateTab(t) {
+  activeId = t.id;
+  await vditor.setValue(t.content || '');
+  var irEl = document.querySelector('.vditor-ir');
+  if (irEl) irEl.scrollTop = t.scroll || 0;
+  setDirty(t.dirty);
+  renderTabs();
+  if (findState.open) setTimeout(function () { runSearch(true); }, 250);
+}
+async function switchTab(id) {
+  if (id === activeId || !tabById(id)) return;
+  cacheActive();
+  await activateTab(tabById(id));
+}
+async function openIntoTab(opts) {
+  cacheActive();
+  var t = newTabObj(opts.name, opts.content, opts.path, opts.fh);
+  tabs.push(t);
+  await activateTab(t);
+}
+async function closeTab(id) {
+  var t = tabById(id);
+  if (!t) return;
+  if (t.dirty) {
+    var ok;
+    if (window.desktop) {
+      ok = await window.desktop.confirm({
+        message: '「' + t.name + '」有未保存的修改',
+        detail: '关闭将丢失未保存的内容。'
+      });
+    } else {
+      ok = window.confirm('「' + t.name + '」有未保存的修改，确定关闭吗？');
+    }
+    if (!ok) return;
+  }
+  clearDraft(t.id);
+  var idx = tabs.indexOf(t);
+  tabs.splice(idx, 1);
+  if (activeId === id) {
+    var next = tabs[idx] || tabs[idx - 1];
+    if (next) await activateTab(next);
+    else await openIntoTab({ name: '未命名', content: '' });
+  } else renderTabs();
+}
+
+/* ---------- 会话恢复 ---------- */
+async function restoreSession() {
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem('mde:tabs') || 'null'); } catch (e) {}
+  if (saved && saved.list && saved.list.length) {
+    for (var i = 0; i < saved.list.length; i++) {
+      var s = saved.list[i];
+      var content = '';
+      var fromDisk = false;
+      if (s.path && window.desktop) {
+        var r = await window.desktop.readPath(s.path);
+        if (!r.error) { content = r.content; fromDisk = true; }
+      }
+      var d = readDraft(s.id);
+      var dirty = false;
+      if (d && d.t && d.t !== content) { content = d.t; dirty = true; }
+      else if (d && d.t && !fromDisk) { content = d.t; dirty = s.dirty ? true : false; }
+      else if (d && d.t && d.t === content && fromDisk) { clearDraft(s.id); }
+      var t = newTabObj(s.name, content, s.path, null);
+      t.id = s.id;
+      var n = parseInt(s.id.slice(1), 10);
+      if (!isNaN(n) && n >= tabSeq) tabSeq = n + 1;
+      tabs.push(t);
+      if (dirty) t.dirty = true;
+    }
+    var act = tabById(saved.active) || tabs[tabs.length - 1];
+    await activateTab(act);
+    return;
+  }
+  await openIntoTab({ name: '未命名', content: WELCOME });
+  setDirty(false);
+}
+
+/* ---------- 文件读写 ---------- */
+var MD_ACCEPT = {
+  'text/markdown': ['.md', '.markdown'],
+  'text/plain': ['.txt']
+};
+async function openFile() {
+  if (window.desktop) {              // 桌面版：原生对话框 → 新标签
+    var r = await window.desktop.open();
+    if (r.canceled) return;
+    if (r.error) return toast('打开失败：' + r.error);
+    var exist = tabs.filter(function (t) { return t.path === r.path; })[0];
+    if (exist) { await switchTab(exist.id); toast('已切换到 ' + r.name); return; }
+    await openIntoTab({ name: r.name, content: r.content, path: r.path });
+    toast('已打开 ' + r.name);
+    return;
+  }
+  if (window.showOpenFilePicker) {   // 网页版
+    try {
+      var handles = await window.showOpenFilePicker({ types: [{ description: 'Markdown 文档', accept: MD_ACCEPT }] });
+      var f = await handles[0].getFile();
+      var exist2 = tabs.filter(function (t) { return t.fh === handles[0]; })[0];
+      if (exist2) { await switchTab(exist2.id); return; }
+      await openIntoTab({ name: f.name, content: await f.text(), fh: handles[0] });
+      toast('已打开 ' + f.name);
+    } catch (e) { if (e && e.name !== 'AbortError') toast('打开失败：' + e.message); }
+  } else {
+    $('fallback-open').click();
+  }
+}
+function fallbackSave(text) {
+  var t = activeTab();
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/markdown' }));
+  var nm = t ? t.name : '未命名';
+  a.download = /\.md$|\.markdown$|\.txt$/i.test(nm) ? nm : nm + '.md';
+  a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  clearDraft(t && t.id); setDirty(false); toast('已下载到浏览器默认下载位置');
+}
+async function save() {
+  var t = activeTab(); if (!t || !ready) return;
+  var text = vditor.getValue();
+  if (window.desktop) {
+    if (!t.path) return saveAs();
+    var r = await window.desktop.write(t.path, text);
+    if (r.error) return toast('保存失败：' + r.error);
+    clearDraft(t.id); setDirty(false); toast('已保存 ' + t.name);
+    return;
+  }
+  if (t.fh) {
+    try {
+      var perm = await t.fh.queryPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') perm = await t.fh.requestPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') return saveAs();
+      var w = await t.fh.createWritable();
+      await w.write(text); await w.close();
+      clearDraft(t.id); setDirty(false); toast('已保存 ' + t.name);
+    } catch (e) { toast('保存失败：' + e.message); }
+  } else saveAs();
+}
+async function saveAs() {
+  var t = activeTab(); if (!t) return;
+  var text = vditor.getValue();
+  if (window.desktop) {
+    var r = await window.desktop.saveAs(text, /\.md$|\.txt$/i.test(t.name) ? t.name : t.name + '.md');
+    if (r.canceled) return;
+    if (r.error) return toast('保存失败：' + r.error);
+    t.path = r.path; t.name = r.name; t.fh = null;
+    clearDraft(t.id); setDirty(false); renderTabs(); toast('已保存 ' + r.name);
+    return;
+  }
+  if (window.showSaveFilePicker) {
+    try {
+      var handle = await window.showSaveFilePicker({
+        suggestedName: /\.md$|\.txt$/i.test(t.name) ? t.name : t.name + '.md',
+        types: [{ description: 'Markdown 文档', accept: { 'text/markdown': ['.md'] } }]
+      });
+      var w = await handle.createWritable();
+      await w.write(text); await w.close();
+      t.fh = handle; t.name = handle.name;
+      clearDraft(t.id); setDirty(false); renderTabs(); toast('已保存 ' + handle.name);
+    } catch (e) { if (e && e.name !== 'AbortError') toast('另存为失败：' + e.message); }
+  } else fallbackSave(text);
+}
+function newFile() {
+  openIntoTab({ name: '未命名', content: '' });
+}
+
+/* ---------- 导出 ---------- */
+var FALLBACK_CSS = 'body{max-width:800px;margin:40px auto;padding:0 20px;font-family:Georgia,"Microsoft YaHei",serif;line-height:1.7;color:#24292f}pre{background:#f6f8fa;padding:14px;border-radius:6px;overflow:auto}code{background:#f6f8fa;padding:2px 5px;border-radius:4px;font-family:Consolas,monospace;font-size:.9em}pre code{background:none;padding:0}table{border-collapse:collapse;margin:1em 0}th,td{border:1px solid #d0d7de;padding:6px 14px}blockquote{border-left:4px solid #d0d7de;margin:0;padding:0 1em;color:#57606a}img{max-width:100%}';
+async function buildExportHtml() {
+  var t = activeTab();
+  var body = vditor.getHTML();
+  var css = FALLBACK_CSS;
+  try {
+    var main = await fetch('./dist/index.css').then(function (r) { return r.text(); });
+    var theme = await fetch('./dist/css/content-theme/light.css').then(function (r) { return r.text(); });
+    css = main + '\n' + theme;
+  } catch (e) { body = '<div style="' + 'max-width:800px;margin:40px auto' + '">' + body + '</div>'; }
+  return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>' +
+    (t ? t.name : '文档').replace(/</g, '&lt;') + '</title><style>' + css + '</style></head><body class="vditor-reset">' +
+    body + '</body></html>';
+}
+function exportBaseName() {
+  var t = activeTab();
+  var nm = t ? t.name : '未命名';
+  return nm.replace(/\.(md|markdown|txt)$/i, '');
+}
+async function exportHtml() {
+  var html = await buildExportHtml();
+  if (window.desktop) {
+    var r = await window.desktop.exportHtml(html, exportBaseName() + '.html');
+    if (r.canceled) return;
+    if (r.error) return toast('导出失败：' + r.error);
+    return toast('已导出 HTML');
+  }
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  a.download = exportBaseName() + '.html';
+  a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  toast('已导出 HTML');
+}
+async function printPdf() {
+  var html = await buildExportHtml();
+  var win = window.open('', '_blank');
+  if (!win) { toast('弹窗被浏览器拦截，请允许弹窗后重试'); return; }
+  win.document.write(html + '<script>setTimeout(function(){window.print()},400)<\/script>');
+  win.document.close();
+}
+async function exportPdf() {
+  var html = await buildExportHtml();
+  if (window.desktop) {
+    var r = await window.desktop.exportPdf(html, exportBaseName() + '.pdf');
+    if (r.canceled) return;
+    if (r.error) return toast('导出失败：' + r.error);
+    return toast('已导出 PDF');
+  }
+  return printPdf();
+}
+
+/* ---------- 图片粘贴/拖入 → 内嵌 dataURL ---------- */
+function readAsDataURL(f) {
+  return new Promise(function (res) {
+    var r = new FileReader();
+    r.onload = function () { res(r.result); }; r.readAsDataURL(f);
+  });
+}
+async function insertImages(files) {
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    if (f.type && f.type.indexOf('image/') === 0) {
+      var d = await readAsDataURL(f);
+      vditor.insertValue('\n![](' + d + ')\n');
+    }
+  }
+}
+
+/* ---------- 右键菜单 ---------- */
+function closeCtx() { $('ctxmenu').style.display = 'none'; }
+function showCtx(x, y, items) {
+  var m = $('ctxmenu');
+  m.innerHTML = '';
+  items.forEach(function (it) {
+    if (it.sep) { var d = document.createElement('div'); d.className = 'ctx-sep'; m.appendChild(d); return; }
+    var b = document.createElement('div');
+    b.className = 'ctx-item' + (it.danger ? ' danger' : '');
+    b.textContent = it.label;
+    b.addEventListener('click', function (ev) { ev.stopPropagation(); closeCtx(); it.fn(); });
+    m.appendChild(b);
+  });
+  m.style.left = '0px'; m.style.top = '0px'; m.style.display = 'block';
+  var r = m.getBoundingClientRect();
+  m.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+  m.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+}
+window.addEventListener('click', closeCtx);
+window.addEventListener('scroll', closeCtx, true);
+window.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeCtx(); });
+window.addEventListener('blur', closeCtx);
+
+/* ---------- 表格行列操作 ---------- */
+function caretTo(el, atEnd) {
+  var sel = window.getSelection();
+  var rng = document.createRange();
+  rng.selectNodeContents(el);
+  rng.collapse(!atEnd);
+  sel.removeAllRanges();
+  sel.addRange(rng);
+}
+function vdSync(caretEl) {
+  var reset = caretEl.closest('.vditor-reset');
+  if (!reset) return;
+  caretTo(caretEl, false);
+  reset.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function emptyCellOf(refCell) {
+  var c = refCell.cloneNode(false);
+  c.textContent = '';
+  return c;
+}
+function opTable(cell, action) {
+  var table = cell.closest('table');
+  if (!table) return;
+  var row = cell.closest('tr');
+  var rows = Array.prototype.slice.call(table.rows);
+  var ri = rows.indexOf(row);
+  var ci = Array.prototype.indexOf.call(row.cells, cell);
+  var cols = row.cells.length;
+
+  function removeTable() {
+    var next = table.nextElementSibling || table.previousElementSibling;
+    var caret = next && next.closest && (next.matches('p,h1,h2,h3,h4,h5,h6,li,td,th') ? next : null);
+    table.parentNode.removeChild(table);
+    vdSync(caret || table.closest('.vditor-reset'));
+  }
+  switch (action) {
+    case 'rowUp':
+    case 'rowDown': {
+      var nr = document.createElement('tr');
+      for (var i = 0; i < cols; i++) nr.appendChild(emptyCellOf(row.cells[i]));
+      if (action === 'rowUp') row.parentNode.insertBefore(nr, row);
+      else if (rows[ri + 1]) rows[ri + 1].parentNode.insertBefore(nr, rows[ri + 1]);
+      else row.parentNode.appendChild(nr);
+      vdSync(nr.cells[Math.min(ci, cols - 1)]);
+      break;
+    }
+    case 'rowDel': {
+      if (rows.length > 2) {
+        var stay = rows[ri + 1] || rows[ri - 1];
+        row.parentNode.removeChild(row);
+        vdSync(stay.cells[Math.min(ci, stay.cells.length - 1)]);
+      } else removeTable();
+      break;
+    }
+    case 'colLeft':
+    case 'colRight': {
+      rows.forEach(function (r) {
+        var ref = r.cells[Math.min(ci, r.cells.length - 1)];
+        var nc = emptyCellOf(ref);
+        if (action === 'colLeft') ref.parentNode.insertBefore(nc, ref);
+        else ref.parentNode.insertBefore(nc, ref.nextSibling);
+      });
+      vdSync(cell);
+      break;
+    }
+    case 'colDel': {
+      if (cols > 1) {
+        var target = null;
+        rows.forEach(function (r) {
+          var idx = Math.min(ci, r.cells.length - 1);
+          var ref = r.cells[idx];
+          if (r === row) { var stay = r.cells[idx + 1] || r.cells[idx - 1]; target = stay; }
+          ref.parentNode.removeChild(ref);
+        });
+        vdSync(target || cell);
+      } else removeTable();
+      break;
+    }
+    case 'tableDel': removeTable(); break;
+  }
+}
+function showTableMenu(x, y, cell) {
+  showCtx(x, y, [
+    { label: '上方插入行', fn: function () { opTable(cell, 'rowUp'); } },
+    { label: '下方插入行', fn: function () { opTable(cell, 'rowDown'); } },
+    { sep: true },
+    { label: '左侧插入列', fn: function () { opTable(cell, 'colLeft'); } },
+    { label: '右侧插入列', fn: function () { opTable(cell, 'colRight'); } },
+    { sep: true },
+    { label: '删除行', danger: true, fn: function () { opTable(cell, 'rowDel'); } },
+    { label: '删除列', danger: true, fn: function () { opTable(cell, 'colDel'); } },
+    { label: '删除表格', danger: true, fn: function () { opTable(cell, 'tableDel'); } }
+  ]);
+}
+window.addEventListener('contextmenu', function (e) {
+  var inEditor = e.target.closest && e.target.closest('.vditor-reset');
+  if (!inEditor) return;
+  e.preventDefault();
+  var cell = e.target.closest('td,th');
+  if (cell) { showTableMenu(e.clientX, e.clientY, cell); return; }
+  if (window.desktop) {
+    showCtx(e.clientX, e.clientY, [
+      { label: '剪切', fn: function () { window.desktop.editCmd('cut'); } },
+      { label: '复制', fn: function () { window.desktop.editCmd('copy'); } },
+      { label: '粘贴', fn: function () { window.desktop.editCmd('paste'); } },
+      { sep: true },
+      { label: '全选', fn: function () { window.desktop.editCmd('selectAll'); } }
+    ]);
+  }
+});
+
+/* ---------- 查找与替换 ---------- */
+var findState = { query: '', caseSensitive: false, ranges: [], idx: -1, open: false, replaceVisible: false };
+function findBarEl() { return $('findbar'); }
+
+function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function clearSearchHighlights() {
+  if (window.CSS && CSS.highlights) { CSS.highlights.delete('mde-hits'); CSS.highlights.delete('mde-cur'); }
+  findState.ranges = []; findState.idx = -1;
+  $('find-count').textContent = '0/0';
+}
+function openFind(withReplace) {
+  findState.open = true;
+  if (withReplace) findState.replaceVisible = true;
+  findBarEl().classList.add('show');
+  $('replace-row').style.display = findState.replaceVisible ? 'flex' : 'none';
+  var fi = $('find-input');
+  fi.focus(); fi.select();
+  runSearch(true);
+}
+function closeFind() {
+  findState.open = false;
+  findBarEl().classList.remove('show');
+  clearSearchHighlights();
+}
+/* 把编辑器文本按块级元素分段（匹配不允许跨块），返回每段的文本与文本节点索引 */
+function collectSegments(root) {
+  var segs = [];
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  var cur = null, n;
+  while ((n = walker.nextNode())) {
+    if (!n.nodeValue) continue;
+    var p = n.parentElement;
+    if (!p) continue;
+    if (p.closest('.vditor-ir__node') && (p.offsetParent === null || p.closest('.vditor-ir__marker--info'))) continue; // 跳过隐藏层与语言标记
+    var block = p.closest('p,h1,h2,h3,h4,h5,h6,li,td,th,dt,dd,pre,blockquote') || root;
+    if (!cur || cur.block !== block) { cur = { block: block, nodes: [], text: '' }; segs.push(cur); }
+    cur.nodes.push({ node: n, start: cur.text.length });
+    cur.text += n.nodeValue;
+  }
+  return segs;
+}
+function offsetToRange(seg, start, end) {
+  var r = document.createRange();
+  var i = 0;
+  while (i < seg.nodes.length && seg.nodes[i].start <= start) i++;
+  var sn = seg.nodes[i - 1];
+  r.setStart(sn.node, start - sn.start);
+  i = 0;
+  while (i < seg.nodes.length && seg.nodes[i].start < end) i++;
+  var en = seg.nodes[i - 1];
+  r.setEnd(en.node, end - en.start);
+  return r;
+}
+function runSearch(keepNearCaret) {
+  var q = $('find-input').value;
+  findState.query = q;
+  findState.ranges = [];
+  var root = document.querySelector('.vditor-ir .vditor-reset');   // 页面有多个 .vditor-reset（含隐藏模板），只取编辑区那个
+  if (q && root) {
+    var segs = collectSegments(root);
+    var needle = findState.caseSensitive ? q : q.toLowerCase();
+    segs.forEach(function (seg) {
+      var hay = findState.caseSensitive ? seg.text : seg.text.toLowerCase();
+      var pos = 0;
+      while ((pos = hay.indexOf(needle, pos)) >= 0) {
+        findState.ranges.push(offsetToRange(seg, pos, pos + q.length));
+        pos += q.length;
+      }
+    });
+  }
+  findState.idx = -1;
+  if (findState.ranges.length) {
+    var idx = 0;
+    var sel = window.getSelection();
+    if (sel && sel.rangeCount && keepNearCaret) {
+      var cr = sel.getRangeAt(0).cloneRange(); cr.collapse(false);
+      for (var i = 0; i < findState.ranges.length; i++) {
+        try {
+          if (findState.ranges[i].compareBoundaryPoints(Range.START_TO_START, cr) >= 0) { idx = i; break; }
+          idx = i;
+        } catch (e) { /* 跨文档比较失败忽略 */ }
+      }
+    }
+    findState.idx = idx;
+  }
+  drawSearch();
+}
+function drawSearch() {
+  var n = findState.ranges.length;
+  $('find-count').textContent = n ? (findState.idx + 1) + '/' + n : '0/0';
+  if (window.CSS && CSS.highlights) {
+    if (!n) { CSS.highlights.delete('mde-hits'); CSS.highlights.delete('mde-cur'); return; }
+    var hits = [];
+    for (var i = 0; i < n; i++) {
+      if (i !== findState.idx && findState.ranges[i].startContainer.isConnected) hits.push(findState.ranges[i]);
+    }
+    var cur = findState.ranges[findState.idx];
+    if (cur && cur.startContainer.isConnected) CSS.highlights.set('mde-cur', new Highlight(cur));
+    else CSS.highlights.delete('mde-cur');
+    if (hits.length) CSS.highlights.set('mde-hits', new (Function.prototype.bind.apply(Highlight, [null].concat(hits)))());
+    else CSS.highlights.delete('mde-hits');
+  } else if (n && findState.idx >= 0) {
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(findState.ranges[findState.idx]);
+  }
+  scrollToCurrent();
+}
+function scrollToCurrent() {
+  var r = findState.ranges[findState.idx];
+  if (!r || !r.startContainer.isConnected) return;
+  var rect = r.getBoundingClientRect();
+  /* 从匹配位置向上找真正可滚动的祖先（内核的实际滚动层是 .vditor-reset） */
+  var el = r.startContainer.parentElement;
+  while (el && el !== document.body) {
+    if (el.scrollHeight > el.clientHeight + 2 && /auto|scroll/.test(getComputedStyle(el).overflowY)) {
+      var er = el.getBoundingClientRect();
+      if (rect.top < er.top + 50 || rect.bottom > er.bottom - 20)
+        el.scrollTop += rect.top - er.top - el.clientHeight / 2;
+      return;
+    }
+    el = el.parentElement;
+  }
+}
+function findNext() {
+  var n = findState.ranges.length; if (!n) return;
+  findState.idx = (findState.idx + 1) % n;
+  drawSearch();
+}
+function findPrev() {
+  var n = findState.ranges.length; if (!n) return;
+  findState.idx = (findState.idx - 1 + n) % n;
+  drawSearch();
+}
+function vdSyncCaret(el) {
+  var reset = el.closest ? el.closest('.vditor-reset') : null;
+  if (!reset) return;
+  caretTo(el, true);
+  reset.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function replaceCurrent() {
+  if (!findState.ranges.length || findState.idx < 0) return;
+  var rg = findState.ranges[findState.idx];
+  if (!rg.startContainer.isConnected) { runSearch(true); if (!findState.ranges.length) return; rg = findState.ranges[findState.idx]; }
+  var q = findState.query;
+  var cur = rg.toString();
+  var same = findState.caseSensitive ? cur === q : cur.toLowerCase() === q.toLowerCase();
+  if (!same) { runSearch(true); if (!findState.ranges.length) return; rg = findState.ranges[findState.idx]; cur = rg.toString(); same = findState.caseSensitive ? cur === q : cur.toLowerCase() === q.toLowerCase(); if (!same) return; }
+  var newText = $('replace-input').value;
+  var host = rg.startContainer.parentElement || document.querySelector('.vditor-reset');
+  rg.deleteContents();
+  if (newText) rg.insertNode(document.createTextNode(newText));
+  vdSyncCaret(host);
+  runSearch(true);
+  setTimeout(function () { if (findState.open) runSearch(true); }, 300);   // 内核重渲染后校正
+}
+function replaceAll() {
+  var q = $('find-input').value;
+  if (!q) return;
+  var md = vditor.getValue();
+  var re = new RegExp(escapeRegExp(q), findState.caseSensitive ? 'g' : 'gi');
+  var n = (md.match(re) || []).length;
+  if (!n) { toast('没有找到「' + q + '」'); return; }
+  var rep = $('replace-input').value.replace(/\$/g, '$$$$');
+  var newMd = md.replace(re, rep);
+  var irEl = document.querySelector('#editor .vditor-ir');
+  var st = irEl ? irEl.scrollTop : 0;
+  vditor.setValue(newMd);
+  setTimeout(function () {
+    if (irEl) irEl.scrollTop = st;
+    runSearch();
+  }, 300);
+  setDirty(true);
+  toast('已替换 ' + n + ' 处（Ctrl+Z 可一步撤销）');
+}
+var findRefreshT = null;
+function scheduleFindRefresh() {
+  if (findRefreshT) return;
+  findRefreshT = setTimeout(function () { findRefreshT = null; if (findState.open) runSearch(true); }, 400);
+}
+$('find-input').addEventListener('input', function () {
+  clearTimeout(findState._t);
+  findState._t = setTimeout(function () { runSearch(false); }, 200);
+});
+$('find-input').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? findPrev() : findNext(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+});
+$('replace-input').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') { e.preventDefault(); replaceCurrent(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+});
+$('find-next').addEventListener('click', findNext);
+$('find-prev').addEventListener('click', findPrev);
+$('find-close').addEventListener('click', closeFind);
+$('find-case').addEventListener('click', function () {
+  findState.caseSensitive = !findState.caseSensitive;
+  this.classList.toggle('on', findState.caseSensitive);
+  runSearch(true);
+});
+$('repl-one').addEventListener('click', replaceCurrent);
+$('repl-all').addEventListener('click', replaceAll);
+
+/* ---------- 拖拽打开 .md → 新标签 ---------- */
+window.addEventListener('dragover', function (e) { e.preventDefault(); }, false);
+window.addEventListener('drop', function (e) {
+  e.preventDefault(); e.stopPropagation();
+  var files = e.dataTransfer && e.dataTransfer.files;
+  if (!files || !files.length) return;
+  var f = files[0];
+  if (/\.(md|markdown|txt)$/i.test(f.name)) {
+    f.text().then(function (t) { return openIntoTab({ name: f.name, content: t }); }).then(function () { toast('已打开 ' + f.name); });
+  } else { insertImages(files); }
+}, true);
+
+/* ---------- 快捷键 ---------- */
+window.addEventListener('keydown', function (e) {
+  if (e.key === 'F3' && findState.open) { e.preventDefault(); e.stopPropagation(); e.shiftKey ? findPrev() : findNext(); return; }
+  if (e.key === 'Escape' && findState.open) { closeFind(); return; }
+  var mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+  var k = e.key.toLowerCase();
+  if (k === 's' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); saveAs(); }
+  else if (k === 's') { e.preventDefault(); e.stopPropagation(); save(); }
+  else if (k === 'o') { e.preventDefault(); e.stopPropagation(); openFile(); }
+  else if (k === 'n') { e.preventDefault(); e.stopPropagation(); newFile(); }
+  else if (k === 'w') { e.preventDefault(); e.stopPropagation(); closeTab(activeId); }
+  else if (k === 'f') { e.preventDefault(); e.stopPropagation(); openFind(false); }
+  else if (k === 'h') { e.preventDefault(); e.stopPropagation(); openFind(true); }
+}, true);
+window.addEventListener('beforeunload', function (e) {
+  if (window.desktop) return;   // 桌面版由主进程统一弹确认框
+  var anyDirty = tabs.some(function (t) { return t.dirty; });
+  if (anyDirty) { e.preventDefault(); e.returnValue = ''; }
+});
+
+/* ---------- 主题 ---------- */
+function applyTheme() {
+  document.body.classList.toggle('dark', dark);
+  localStorage.setItem('mde:dark', dark ? '1' : '0');
+  var btn = document.querySelector('[data-act="theme"]');
+  if (btn) btn.textContent = dark ? '☀️ 亮色' : '🌙 暗色';
+  if (vditor) {
+    try {
+      vditor.setTheme(dark ? 'dark' : 'classic', dark ? 'dark' : 'light', dark ? 'vs2015' : 'github');
+    } catch (e) { location.reload(); }
+  }
+}
+
+/* ---------- 菜单事件 ---------- */
+var ACTIONS = {
+  new: newFile, open: openFile, save: save, saveas: saveAs,
+  closetab: function () { closeTab(activeId); },
+  exporthtml: exportHtml, pdf: exportPdf,
+  print: function () { if (window.desktop) { window.desktop.print(); } else { printPdf(); } },
+  theme: function () { dark = !dark; applyTheme(); }
+};
+document.getElementById('menubar').addEventListener('click', function (e) {
+  var btn = e.target.closest('button[data-act]');
+  if (btn && ACTIONS[btn.dataset.act]) ACTIONS[btn.dataset.act]();
+});
+$('fallback-open').addEventListener('change', function () {
+  var f = this.files[0]; this.value = '';
+  if (f) f.text().then(function (t) { return openIntoTab({ name: f.name, content: t }); });
+});
+
+/* ---------- 初始化 ---------- */
+if (window.desktop) {
+  window.desktop.onMenu(function (act) {
+    if (ACTIONS[act]) ACTIONS[act]();
+  });
+}
+if (location.protocol === 'file:' && !window.desktop) {
+  document.getElementById('editor').innerHTML =
+    '<div style="max-width:560px;margin:120px auto;text-align:center;font-size:15px;line-height:2">' +
+    '<h2 style="margin-bottom:8px">请使用桌面程序打开</h2>' +
+    '浏览器安全策略不允许直接双击打开本页（编辑器内核无法加载）。</div>';
+} else {
+applyTheme();
+vditor = new Vditor('editor', {
+  cdn: '.',
+  lang: 'zh_CN',
+  mode: 'ir',                     // 即时渲染（Typora 式）
+  icon: 'ant',
+  theme: dark ? 'dark' : 'classic',
+  value: WELCOME,
+  cache: { enable: false },       // 草稿与标签由本页自管
+  counter: { enable: true },
+  preview: {
+    theme: { current: dark ? 'dark' : 'light', path: './dist/css/content-theme' },
+    hljs: { style: dark ? 'vs2015' : 'github', lineNumber: false }
+  },
+  toolbar: [
+    'headings', 'bold', 'italic', 'strike', '|',
+    'list', 'ordered-list', 'check', 'outdent', 'indent', '|',
+    'quote', 'code', 'inline-code', 'table', 'link', '|',
+    'undo', 'redo', '|', 'fullscreen'
+  ],
+  upload: {
+    handler: function (files) { insertImages(files); return ''; }
+  },
+  input: function () { if (ready) { setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh(); } },
+  after: function () {
+    ready = true;
+    restoreSession();
+  }
+});
+}
+</script>
+</body>
+</html>

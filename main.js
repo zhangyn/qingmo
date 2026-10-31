@@ -93,14 +93,7 @@ function buildMenu() {
       { label: '剪切', role: 'cut' },
       { label: '复制', role: 'copy' },
       { label: '粘贴', role: 'paste' },
-      { label: '全选', role: 'selectAll' },
-      { type: 'separator' },
-      { label: '行工具', submenu: [
-        { label: '合并为一行（单引号）', click: () => sendMenu('line-s') },
-        { label: '合并为一行（双引号）', click: () => sendMenu('line-d') },
-        { label: '合并为一行（无引号）', click: () => sendMenu('line-n') },
-        { label: '拆分为多行', click: () => sendMenu('line-split') }
-      ] }
+      { label: '全选', role: 'selectAll' }
     ]
   },
   {

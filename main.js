@@ -59,7 +59,7 @@ function createWindow() {
     y: (typeof st.y === 'number' && st.y >= -200 && st.y < 2200) ? st.y : undefined,
     minWidth: 620,
     minHeight: 440,
-    title: 'MD 编辑器',
+    title: '轻墨 QingMo',
     icon: path.join(__dirname, 'app.ico'),
     backgroundColor: '#f8f9fb',
     show: false,
@@ -205,7 +205,7 @@ ipcMain.on('win:print', () => { if (win) win.webContents.print({}); });
 ipcMain.on('edit:cmd', (e, cmd) => {
   if (win && ['cut', 'copy', 'paste', 'selectAll'].indexOf(cmd) >= 0) win.webContents[cmd]();
 });
-ipcMain.on('title:set', (e, t) => { if (win) win.setTitle(t || 'MD 编辑器'); });
+ipcMain.on('title:set', (e, t) => { if (win) win.setTitle(t || '轻墨 QingMo'); });
 ipcMain.on('dirty:set', (e, v) => { isDirty = !!v; });
 ipcMain.on('app:help', () => { shell.openPath(path.join(path.dirname(process.execPath), '使用说明.txt')); });
 ipcMain.on('win:fullscreen', () => { if (win) win.setFullScreen(!win.isFullScreen()); });

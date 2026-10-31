@@ -1,8 +1,12 @@
-# MD 编辑器
+# QingMo 轻墨
 
-一个免费、离线使用的本地 Markdown 编辑器。写作方式与 Typora 相同：**输入即渲染**，
-不需要左右分栏预览。基于 [Vditor](https://github.com/Vanessa219/vditor) 4.0.1 内核（已随仓库内置，
-全部依赖本地化，不联网、不上传任何内容）。
+一个免费、离线使用的本地 Markdown / 代码编辑器。写作方式与 Typora 相同：**输入即渲染**，
+不需要左右分栏预览；`.java/.sql/.json` 等代码文件自动切换语法高亮模式。
+
+基于 [Vditor](https://github.com/Vanessa219/vditor) 4.0.1 与 [CodeMirror 6](https://codemirror.net/)，
+全部依赖本地化内置，不联网、不上传任何内容。
+
+> 「轻墨」—— 轻量，落墨即成文。
 
 ## 功能
 

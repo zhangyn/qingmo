@@ -368,8 +368,8 @@ function cmEnsure(t) {
       CM6.bracketMatching(),
       CM6.foldGutter(),
       CM6.history(),
-      CM6.keymap.of([CM6.defaultKeymap, CM6.historyKeymap, CM6.foldKeymap, CM6.indentWithTab]),
       CM6.keymap.of(LINE_KEYMAP),
+      CM6.keymap.of([CM6.defaultKeymap, CM6.historyKeymap, CM6.foldKeymap, CM6.indentWithTab]),
       CM6.search(),
       CM6.highlightSelectionMatches(),
       CM6.syntaxHighlighting(CM6.defaultHighlightStyle, { fallback: true }),
@@ -475,6 +475,8 @@ function cmdCutLine(view) {
   return true;
 }
 var LINE_KEYMAP = [
+  { key: 'Tab', run: function (v) { v.dispatch(v.state.replaceSelection('	')); return true; } },
+  { key: 'Shift-Tab', run: function (v) { CM6.indentLess(v); return true; } },
   { key: 'Ctrl-y', run: function (v) { CM6.deleteLine(v); return true; } },
   { key: 'Ctrl-d', run: function (v) { CM6.copyLineDown(v); return true; } },
   { key: 'Alt-ArrowUp', run: function (v) { CM6.moveLineUp(v); return true; } },
@@ -1383,6 +1385,7 @@ document.getElementById('menubar').addEventListener('click', function (e) {
   var btn = e.target.closest('button[data-act]');
   if (!btn) return;
   if (btn.dataset.act === 'linetools') {
+    e.stopPropagation();
     if (!isCodeMode()) { toast('行工具请在代码模式（非 .md 文件）下使用'); return; }
     var r = btn.getBoundingClientRect();
     showCtx(r.left, r.bottom + 4, [

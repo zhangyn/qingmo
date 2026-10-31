@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MD 编辑器</title>
+<title>轻墨 QingMo</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234e6ef2'/%3E%3Ctext x='16' y='23' font-size='18' font-weight='bold' text-anchor='middle' fill='white' font-family='sans-serif'%3EM%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="./dist/index.css">
 <style>
@@ -371,7 +371,7 @@ function setDirty(v) {
   var t = activeTab(); if (!t) return;
   if (t.dirty !== v) { t.dirty = v; renderTabs(); }
   $('savestate').textContent = tabs.some(function (x) { return x.dirty; }) ? '● 未保存' : '';
-  document.title = (v ? '● ' : '') + t.name + ' - MD 编辑器';
+  document.title = (v ? '● ' : '') + t.name + ' - 轻墨 QingMo';
   if (window.desktop) window.desktop.setDirty(tabs.some(function (x) { return x.dirty; }));
 }
 
@@ -734,7 +734,7 @@ setInterval(function () {
 
 /* ---------- 欢迎文档 ---------- */
 var WELCOME = [
-'# 欢迎使用 MD 编辑器 ✨',
+'# 欢迎使用 轻墨 QingMo ✨',
 '',
 '这是一个**免费、离线可用**的 Markdown 编辑器，写作方式与 Typora 一样：',
 '**输入即渲染**，不需要左右分栏预览。',

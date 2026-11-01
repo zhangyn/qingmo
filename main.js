@@ -128,7 +128,7 @@ function createWindow() {
     e.preventDefault();
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });
-  win.loadFile('editor.html');
+  win.loadFile('editor.html', { query: { debug: '1' } });
 }
 
 

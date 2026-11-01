@@ -59,8 +59,12 @@
 
 ```
 md-editor/
-├── editor.html      渲染层页面（桌面版与网页版共用）：标签页、查找替换、
-│                    右键菜单、草稿/会话恢复、主题等全部界面逻辑
+├── editor.html      渲染层页面骨架（桌面版与网页版共用）：菜单栏、页签、
+│                    查找栏、编辑区容器等结构与样式
+├── js/              界面逻辑模块（自 editor.html 拆分，按序加载）：
+│                    状态/标签页、CodeMirror/行工具、大纲/最近打开/光标历史、
+│                    视图开关/打字机、草稿/变更检测、欢迎/会话恢复、
+│                    文件读写/导出/图片、右键菜单/表格/查找替换、事件、应用入口
 ├── main.js          Electron 主进程：窗口、文件对话框、PDF 导出、
 │                    图片资源化、导航守卫、关闭确认（无原生菜单）
 ├── preload.js       渲染层 ↔ 主进程的安全桥接（contextBridge）
@@ -79,7 +83,7 @@ md-editor/
    [npmmirror 镜像](https://registry.npmmirror.com/-/binary/electron/)获取 `electron-v33.x.x-win32-x64.zip` 并解压；
    已装 Node.js 也可直接 `npm i` 安装 electron 后 `npx electron .`
 2. 删除解压目录里的 `resources/default_app.asar`
-3. 将本仓库的 `editor.html`、`main.js`、`preload.js`、`package.json`、`cm6.js`、
+3. 将本仓库的 `editor.html`、`js/`、`main.js`、`preload.js`、`package.json`、`cm6.js`、
    `使用说明.txt`、`dist/` 放入 `resources/app/`
 4. 把 `electron.exe` 改名（如 `MD编辑器.exe`），双击即可运行；
    可为它创建桌面快捷方式

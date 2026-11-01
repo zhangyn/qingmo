@@ -347,10 +347,16 @@ function kbBlockKey(e) {
   if (k.length === 1) { editColBlock('insert', k); return true; }
   kbBlockCancel(); return false;                               // IME 组合键等：退出列块走默认
 }
+/* 鼠标事件 → 文档位置（列块拖选用） */
+function colPosAt(e) {
+  if (!cmView) return null;
+  try { return cmView.posAtCoords({ x: e.clientX, y: e.clientY }) || null; }
+  catch (err) { return null; }
+}
 /* Win+拖拽建立/调整列块（鼠标路径） */
 $('cmhost').addEventListener('mousedown', function (e) {
   kbBlockCancel();
-  if (e.button !== 0 || !e.metaKey || !isCodeMode()) return;
+  if (e.button !== 0 || !(e.metaKey || e.altKey) || !isCodeMode()) return;   // Win 或 Alt 均可启动列块拖选
   var pos = colPosAt(e);
   if (pos == null) return;
   e.preventDefault();

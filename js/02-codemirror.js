@@ -23,7 +23,7 @@ function cmEnsure(t) {
       CM6.keymap.of([CM6.defaultKeymap, CM6.historyKeymap, CM6.foldKeymap, CM6.indentWithTab]),
       CM6.search(),
       CM6.highlightSelectionMatches(),
-      CM6.rectangularSelection(),   // Alt+拖拽按列选中
+
       CM6.syntaxHighlighting(CM6.defaultHighlightStyle, { fallback: true }),
       cmWsComp.of(uiWs ? [CM6.highlightWhitespace(), CM6.highlightTrailingWhitespace()] : []),
       cmWrapComp.of(uiWrap ? CM6.EditorView.lineWrapping : []),
@@ -34,14 +34,14 @@ function cmEnsure(t) {
           lastEditAt = Date.now();
           setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh();
           cmTypewriterCenter(u);
-          kbBlockCancel();
+          if (Date.now() - __kbSelfAt > 500) kbBlockCancel();   // 非列块自身发起的文档变更（撤销/外部编辑等）取消块状态
           if (activeTab() && activeTab().kind === 'code' && cursorHist.length) {
             var top = cursorHist[cursorIdx];
             if (top && top.tabId === activeId && top.from != null) { var sel2 = u.state.selection.main; top.from = sel2.from; top.to = sel2.to; top.line = u.state.doc.lineAt(sel2.head).number; }
           }
         } else if (u.selectionSet) {
           recordCodeJump();
-          if (!__kbSelf) kbBlockCancel();   // 非列块自身发起的选区变更（点击/查找跳转等）取消块状态
+          if (Date.now() - __kbSelfAt > 500) kbBlockCancel();   // 非列块自身发起的选区变更（点击/查找跳转等）取消块状态
         }
       })
     ]
@@ -157,7 +157,7 @@ var LINE_KEYMAP = [
   { key: 'Alt-ArrowUp', run: function (v) { return kbBlockArrow(-1, 0); } },
   { key: 'Alt-ArrowRight', run: function (v) { return kbBlockArrow(0, 1); } },
   { key: 'Alt-ArrowLeft', run: function (v) { return kbBlockArrow(0, -1); } },
-  { any: function () { kbBlockCancel(); return false; } },
+  { any: function (v, e) { return kbBlockKey(e); } },
   { key: 'Ctrl-c', run: function (v) { if (!v.state.selection.main.empty) return false; return cmdCopyLine(v); } },
   { key: 'Ctrl-x', run: function (v) { if (!v.state.selection.main.empty) return false; return cmdCutLine(v); } }
 ];
@@ -191,58 +191,61 @@ function lineTool(op) {
 }
 
 
-/* ---------- Win/Alt + 拖拽按列选中（仅代码模式；md 为 contenteditable 无法列选） ---------- */
-var colSel = null;   // 列选起点文档位置
-function colPosAt(e) {
-  if (!cmView) return null;
-  try { return cmView.posAtCoords({ x: e.clientX, y: e.clientY }); } catch (err) { return null; }
-}
-function colES() { return cmView.state.selection.constructor; }   // bundle 未导出 EditorSelection，从实例取构造器
-function applyColSelect(anchor, head) {
-  if (!cmView || head == null) return;
-  var doc = cmView.state.doc;
-  var aL = doc.lineAt(anchor), hL = doc.lineAt(head);
-  var fromL = Math.min(aL.number, hL.number), toL = Math.max(aL.number, hL.number);
-  var cL = Math.min(anchor - aL.from, head - hL.from), cR = Math.max(anchor - aL.from, head - hL.from);
-  var ranges = [];
-  for (var ln = fromL; ln <= toL; ln++) {
-    var line = doc.line(ln);
-    ranges.push(colES().range(line.from + Math.min(cL, line.length), line.from + Math.min(cR, line.length)));
-  }
-  if (ranges.length) cmView.dispatch({ selection: colES().create(ranges), scrollIntoView: true });
-}
-$('cmhost').addEventListener('mousedown', function (e) {
-  if (e.button !== 0 || !e.metaKey || !isCodeMode()) return;   // 仅 Win 键（Alt 由内核 rectangularSelection 处理）
-  var pos = colPosAt(e);
-  if (pos == null) return;
-  e.preventDefault();          // 阻断原生拖选
-  e.stopPropagation();         // 捕获阶段阻断 CM6 自带拖选跟踪接管本次按下
-  if (!cmView.hasFocus) cmView.focus();   // 未聚焦时 view 会把多选区收缩为单一选区，必须先聚焦
-  colSel = pos;
-}, true);
-window.addEventListener('mousemove', function (e) {
-  if (colSel == null) return;
-  e.preventDefault();
-  applyColSelect(colSel, colPosAt(e));
-});
-window.addEventListener('mouseup', function () { colSel = null; });
 
-/* ---------- Alt+方向键 列块选择（EditPlus 式，仅代码模式） ---------- */
+/* ---------- 列块选择与编辑（EditPlus 式：Alt+方向键 / Win+拖拽；覆盖层高亮+按键拦截，不依赖多光标） ---------- */
 var kbBlock = null;      // { sLine, sCol, hLine, hCol } 起始角与移动角
-var __kbSelf = false;    // 标记选区变更由列块自身发起
-function kbBlockCancel() { kbBlock = null; }
-function kbBlockApply() {
-  var doc = cmView.state.doc;
-  var fromL = Math.min(kbBlock.sLine, kbBlock.hLine), toL = Math.max(kbBlock.sLine, kbBlock.hLine);
-  var cL = Math.min(kbBlock.sCol, kbBlock.hCol), cR = Math.max(kbBlock.sCol, kbBlock.hCol);
-  var ranges = [];
-  for (var ln = fromL; ln <= toL; ln++) {
-    var line = doc.line(ln);
-    ranges.push(colES().range(line.from + Math.min(cL, line.length), line.from + Math.min(cR, line.length)));
+var colDrag = null;      // Win+拖拽进行中
+var __kbSelfAt = 0;      // 列块自身事务的时间戳（延迟二段更新不计为外部变更）
+var colBlockLayer = null;
+function colBlockLayerEl() {
+  if (!colBlockLayer) {
+    colBlockLayer = document.createElement('div');
+    colBlockLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:5;overflow:hidden';
+    document.body.appendChild(colBlockLayer);
   }
-  __kbSelf = true;
-  cmView.dispatch({ selection: colES().create(ranges), scrollIntoView: true });
-  __kbSelf = false;
+  return colBlockLayer;
+}
+function kbBlockCancel() {
+  if (!kbBlock) return;
+  kbBlock = null; colDrag = null;
+  if (colBlockLayer) colBlockLayer.innerHTML = '';
+}
+function blockCorners(doc) {
+  return {
+    fromL: Math.min(kbBlock.sLine, kbBlock.hLine), toL: Math.max(kbBlock.sLine, kbBlock.hLine),
+    cL: Math.min(kbBlock.sCol, kbBlock.hCol), cR: Math.max(kbBlock.sCol, kbBlock.hCol)
+  };
+}
+function drawColBlockOverlay() {
+  if (!cmView || !kbBlock) { if (colBlockLayer) colBlockLayer.innerHTML = ''; return; }
+  var layer = colBlockLayerEl();
+  layer.innerHTML = '';
+  var doc = cmView.state.doc;
+  var c = blockCorners(doc);
+  var lh = null;
+  for (var ln = c.fromL; ln <= c.toL; ln++) {
+    var line = doc.line(ln);
+    var f = cmView.coordsAtPos(line.from + Math.min(c.cL, line.length));
+    var t = cmView.coordsAtPos(line.from + Math.min(c.cR, line.length));
+    if (!f || !t) continue;
+    var rect = document.createElement('div');
+    var left = Math.min(f.left, t.left), right = Math.max(f.left, t.left);
+    rect.style.cssText = 'position:fixed;pointer-events:none;background:rgba(126,160,255,.30);' +
+      'left:' + left + 'px;top:' + f.top + 'px;width:' + Math.max(2, right - left) + 'px;height:' + (f.bottom - f.top) + 'px';
+    layer.appendChild(rect);
+    lh = f.bottom - f.top;
+  }
+}
+function renderColBlock() {
+  if (!cmView || !kbBlock) return;
+  var doc = cmView.state.doc;
+  var hl = doc.line(Math.min(kbBlock.hLine, doc.lines));
+  __kbSelfAt = Date.now();
+  cmView.dispatch({
+    selection: { anchor: hl.from + Math.min(kbBlock.hCol, hl.length) },
+    scrollIntoView: true
+  });
+  drawColBlockOverlay();
 }
 function kbBlockArrow(dl, dc) {
   if (!cmView || !isCodeMode()) return false;
@@ -255,13 +258,123 @@ function kbBlockArrow(dl, dc) {
   kbBlock.hLine = Math.max(1, Math.min(kbBlock.hLine + dl, doc.lines));
   kbBlock.hCol = Math.max(0, kbBlock.hCol + dc);
   if (kbBlock.hLine === kbBlock.sLine && kbBlock.hCol === kbBlock.sCol && !dc) {
-    // 回到起始点且零宽：收敛为普通光标
     var l0 = doc.line(kbBlock.sLine), at = l0.from + kbBlock.sCol;
     kbBlockCancel();
     cmView.dispatch({ selection: { anchor: at } });
     return true;
   }
-  kbBlockApply();
+  renderColBlock();
   return true;
 }
-$('cmhost').addEventListener('mousedown', function () { kbBlockCancel(); });   // 点击重选即取消块状态
+/* 列块内逐行编辑：insert(单字符) / backspace / delete */
+function editColBlock(op, ch) {
+  var doc = cmView.state.doc;
+  var c = blockCorners(doc);
+  var changes = [];
+  for (var ln = c.fromL; ln <= c.toL; ln++) {
+    var line = doc.line(ln);
+    var f = line.from + Math.min(c.cL, line.length), t = line.from + Math.min(c.cR, line.length);
+    if (op === 'insert') changes.push({ from: f, to: t, insert: ch });
+    else if (op === 'backspace') { if (c.cL === c.cR) { if (f === line.from) continue; f = f - 1; } changes.push({ from: f, to: t }); }
+    else if (op === 'delete') { if (c.cL === c.cR && t >= line.to) continue; changes.push({ from: f, to: c.cL === c.cR ? Math.min(t + 1, line.to) : t }); }
+  }
+  if (!changes.length) return;
+  if (op === 'insert') { kbBlock.sCol = c.cL + 1; kbBlock.hCol = c.cR + 1; }   // 块跟随键入文本右移：连续键入为插入语义
+  if (op === 'backspace' && c.cL === c.cR && c.cL > 0) { kbBlock.sCol = c.cL - 1; kbBlock.hCol = c.cR - 1; }
+  if ((op === 'backspace' || op === 'delete') && c.cL < c.cR) { var m = Math.min(kbBlock.sCol, kbBlock.hCol); kbBlock.sCol = m; kbBlock.hCol = m; }
+  __kbSelfAt = Date.now();
+  var hl = doc.line(Math.min(kbBlock.hLine, doc.lines));
+  cmView.dispatch({
+    changes: changes,
+    selection: { anchor: hl.from + Math.min(kbBlock.hCol, hl.length) }
+  });
+  drawColBlockOverlay();
+}
+function colBlockText() {
+  var doc = cmView.state.doc;
+  var c = blockCorners(doc);
+  var ls = [];
+  for (var ln = c.fromL; ln <= c.toL; ln++) {
+    var line = doc.line(ln);
+    ls.push(line.text.slice(Math.min(c.cL, line.length), Math.min(c.cR, line.length)));
+  }
+  return ls.join('\n');
+}
+function deleteColBlock() {
+  var doc = cmView.state.doc;
+  var c = blockCorners(doc);
+  var changes = [];
+  for (var ln = c.fromL; ln <= c.toL; ln++) {
+    var line = doc.line(ln);
+    if (c.cL < c.cR || c.cR < line.length) changes.push({ from: line.from + Math.min(c.cL, line.length), to: line.from + Math.min(c.cR, line.length) });
+  }
+  if (changes.length) { __kbSelfAt = Date.now(); cmView.dispatch({ changes: changes }); }
+  kbBlock.hCol = Math.min(kbBlock.sCol, kbBlock.hCol); kbBlock.sCol = kbBlock.hCol;
+  drawColBlockOverlay();
+}
+/* 块激活期间的按键分发（CM6 keymap any 入口） */
+function kbBlockKey(e) {
+  if (!kbBlock || !cmView || !isCodeMode()) return false;
+  var k = e.key || '';
+  if (e.altKey && /^Arrow/.test(k)) return false;              // 列块移动，交给上面的绑定
+  if (k === 'Escape') { kbBlockCancel(); return true; }
+  if (e.ctrlKey || e.metaKey) {
+    var low = k.toLowerCase();
+    if (low === 'c') { if (navigator.clipboard) navigator.clipboard.writeText(colBlockText()); return true; }
+    if (low === 'x') { var txt = colBlockText(); if (navigator.clipboard) navigator.clipboard.writeText(txt); deleteColBlock(); return true; }
+    kbBlockCancel(); return false;                             // 其余组合键走默认（docChanged 会清理）
+  }
+  if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight') { kbBlockCancel(); return false; }
+  if (k === 'Backspace') { editColBlock('backspace'); return true; }
+  if (k === 'Delete') { editColBlock('delete'); return true; }
+  if (k === 'Enter' || k === 'Tab') { kbBlockCancel(); return false; }
+  if (k.length === 1) { editColBlock('insert', k); return true; }
+  kbBlockCancel(); return false;                               // IME 组合键等：退出列块走默认
+}
+/* Win+拖拽建立/调整列块（鼠标路径） */
+$('cmhost').addEventListener('mousedown', function (e) {
+  kbBlockCancel();
+  if (e.button !== 0 || !e.metaKey || !isCodeMode()) return;
+  var pos = colPosAt(e);
+  if (pos == null) return;
+  e.preventDefault();
+  e.stopPropagation();         // 捕获阶段阻断 CM6 自带拖选
+  if (!cmView.hasFocus) cmView.focus();
+  var doc = cmView.state.doc, L = doc.lineAt(pos);
+  kbBlock = { sLine: L.number, sCol: pos - L.from, hLine: L.number, hCol: pos - L.from };
+  colDrag = true;
+  renderColBlock();
+}, true);
+window.addEventListener('mousemove', function (e) {
+  if (!colDrag || !cmView) return;
+  e.preventDefault();
+  var pos = colPosAt(e);
+  if (pos == null) return;
+  var doc = cmView.state.doc, L = doc.lineAt(pos);
+  kbBlock.hLine = L.number; kbBlock.hCol = pos - L.from;
+  renderColBlock();
+});
+window.addEventListener('mouseup', function () { colDrag = null; });
+/* 滚动/窗口变化 → 覆盖层跟随 */
+$('cmhost').addEventListener('scroll', function () { if (kbBlock) drawColBlockOverlay(); }, true);
+window.addEventListener('resize', function () { if (kbBlock) drawColBlockOverlay(); });
+/* 块激活时拦截粘贴：逐行分发 */
+document.querySelector('#cmhost').addEventListener('paste', function (e) {
+  if (!kbBlock || !isCodeMode()) return;
+  var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+  if (!text) return;
+  e.preventDefault(); e.stopPropagation();
+  var doc = cmView.state.doc;
+  var c = blockCorners(doc);
+  var pl = text.split('\n'), n = c.toL - c.fromL + 1, changes = [];
+  for (var ln = c.fromL; ln <= c.toL; ln++) {
+    var line = doc.line(ln);
+    var ins = pl.length === n ? pl[ln - c.fromL] : pl.join(' ');
+    changes.push({ from: line.from + Math.min(c.cL, line.length), to: line.from + Math.min(c.cR, line.length), insert: ins });
+  }
+  var width = Math.max.apply(null, changes.map(function (c2) { return c2.insert.length; }));
+  kbBlock.sCol = c.cL; kbBlock.hCol = c.cL + width;
+  __kbSelfAt = Date.now();
+  cmView.dispatch({ changes: changes });
+  drawColBlockOverlay();
+}, true);

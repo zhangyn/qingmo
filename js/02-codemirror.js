@@ -34,12 +34,14 @@ function cmEnsure(t) {
           lastEditAt = Date.now();
           setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh();
           cmTypewriterCenter(u);
+          kbBlockCancel();
           if (activeTab() && activeTab().kind === 'code' && cursorHist.length) {
             var top = cursorHist[cursorIdx];
             if (top && top.tabId === activeId && top.from != null) { var sel2 = u.state.selection.main; top.from = sel2.from; top.to = sel2.to; top.line = u.state.doc.lineAt(sel2.head).number; }
           }
         } else if (u.selectionSet) {
           recordCodeJump();
+          if (!__kbSelf) kbBlockCancel();   // 非列块自身发起的选区变更（点击/查找跳转等）取消块状态
         }
       })
     ]
@@ -149,8 +151,13 @@ var LINE_KEYMAP = [
   { key: 'Shift-Tab', run: function (v) { CM6.indentLess(v); return true; } },
   { key: 'Ctrl-y', run: function (v) { CM6.deleteLine(v); return true; } },
   { key: 'Ctrl-d', run: function (v) { CM6.copyLineDown(v); return true; } },
-  { key: 'Alt-ArrowUp', run: function (v) { CM6.moveLineUp(v); return true; } },
-  { key: 'Alt-ArrowDown', run: function (v) { CM6.moveLineDown(v); return true; } },
+  { key: 'Ctrl-Shift-ArrowUp', run: function (v) { CM6.moveLineUp(v); return true; } },
+  { key: 'Ctrl-Shift-ArrowDown', run: function (v) { CM6.moveLineDown(v); return true; } },
+  { key: 'Alt-ArrowDown', run: function (v) { return kbBlockArrow(1, 0); } },
+  { key: 'Alt-ArrowUp', run: function (v) { return kbBlockArrow(-1, 0); } },
+  { key: 'Alt-ArrowRight', run: function (v) { return kbBlockArrow(0, 1); } },
+  { key: 'Alt-ArrowLeft', run: function (v) { return kbBlockArrow(0, -1); } },
+  { any: function () { kbBlockCancel(); return false; } },
   { key: 'Ctrl-c', run: function (v) { if (!v.state.selection.main.empty) return false; return cmdCopyLine(v); } },
   { key: 'Ctrl-x', run: function (v) { if (!v.state.selection.main.empty) return false; return cmdCutLine(v); } }
 ];
@@ -219,3 +226,42 @@ window.addEventListener('mousemove', function (e) {
   applyColSelect(colSel, colPosAt(e));
 });
 window.addEventListener('mouseup', function () { colSel = null; });
+
+/* ---------- Alt+方向键 列块选择（EditPlus 式，仅代码模式） ---------- */
+var kbBlock = null;      // { sLine, sCol, hLine, hCol } 起始角与移动角
+var __kbSelf = false;    // 标记选区变更由列块自身发起
+function kbBlockCancel() { kbBlock = null; }
+function kbBlockApply() {
+  var doc = cmView.state.doc;
+  var fromL = Math.min(kbBlock.sLine, kbBlock.hLine), toL = Math.max(kbBlock.sLine, kbBlock.hLine);
+  var cL = Math.min(kbBlock.sCol, kbBlock.hCol), cR = Math.max(kbBlock.sCol, kbBlock.hCol);
+  var ranges = [];
+  for (var ln = fromL; ln <= toL; ln++) {
+    var line = doc.line(ln);
+    ranges.push(colES().range(line.from + Math.min(cL, line.length), line.from + Math.min(cR, line.length)));
+  }
+  __kbSelf = true;
+  cmView.dispatch({ selection: colES().create(ranges), scrollIntoView: true });
+  __kbSelf = false;
+}
+function kbBlockArrow(dl, dc) {
+  if (!cmView || !isCodeMode()) return false;
+  var doc = cmView.state.doc;
+  if (!kbBlock) {
+    var sel = cmView.state.selection.main;
+    var aL = doc.lineAt(sel.anchor), hL = doc.lineAt(sel.head);
+    kbBlock = { sLine: aL.number, sCol: sel.anchor - aL.from, hLine: hL.number, hCol: sel.head - hL.from };
+  }
+  kbBlock.hLine = Math.max(1, Math.min(kbBlock.hLine + dl, doc.lines));
+  kbBlock.hCol = Math.max(0, kbBlock.hCol + dc);
+  if (kbBlock.hLine === kbBlock.sLine && kbBlock.hCol === kbBlock.sCol && !dc) {
+    // 回到起始点且零宽：收敛为普通光标
+    var l0 = doc.line(kbBlock.sLine), at = l0.from + kbBlock.sCol;
+    kbBlockCancel();
+    cmView.dispatch({ selection: { anchor: at } });
+    return true;
+  }
+  kbBlockApply();
+  return true;
+}
+$('cmhost').addEventListener('mousedown', function () { kbBlockCancel(); });   // 点击重选即取消块状态

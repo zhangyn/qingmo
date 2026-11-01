@@ -2,5 +2,17 @@
   "name": "qingmo",
   "productName": "轻墨 QingMo",
   "version": "1.0.0",
-  "main": "main.js"
+  "description": "免费、离线的本地 Markdown/代码编辑器（Typora 式即时渲染）",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-packager . qingmo --platform=win32 --arch=x64 --out=out --overwrite --icon=app.ico --executable-name=QingMo --ignore=\"^/web\" --ignore=\"^/out\" --prune"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.6.3"
+  },
+  "devDependencies": {
+    "@electron/packager": "^18.3.6",
+    "electron": "^33.0.0"
+  }
 }

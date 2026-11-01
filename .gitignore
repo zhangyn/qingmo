@@ -12,3 +12,6 @@ Thumbs.db
 electron-v*.zip
 electron/
 out/
+
+# Node 依赖（lock 文件入库，目录不入库）
+node_modules/

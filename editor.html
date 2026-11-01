@@ -32,6 +32,7 @@
     padding: 5px 9px; border-radius: 5px; cursor: pointer; font-size: 13px;
   }
   #menubar button:hover { background: var(--btn-hover); }
+  #menubar button.on { background: var(--accent); color: #fff; }
   .sep { width: 1px; height: 16px; background: var(--bar-border); margin: 0 6px; }
   .spacer { flex: 1; }
   #savestate { font-size: 12px; opacity: .6; padding: 0 8px; }
@@ -55,6 +56,8 @@
   .tab.active {
     background: var(--bar-bg); border-color: var(--bar-border);
     position: relative; top: 1px;
+    font-weight: 600;
+    box-shadow: inset 0 2px 0 var(--accent);   /* 主题色高亮条，明暗模式都醒目 */
   }
   .tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tab .dot { color: #e6a23c; flex-shrink: 0; }
@@ -63,6 +66,10 @@
     font-size: 14px; line-height: 1; flex-shrink: 0;
   }
   .tab .x:hover { background: var(--btn-hover); opacity: 1; }
+  /* ---- 页签置底模式（页签右键可切换，flex order 挪到 main 之后） ---- */
+  body.tabs-bottom #tabbar { order: 9; border-bottom: none; border-top: 1px solid var(--bar-border); }
+  body.tabs-bottom .tab { border: 1px solid transparent; border-top: none; border-radius: 0 0 6px 6px; }
+  body.tabs-bottom .tab.active { top: -1px; box-shadow: inset 0 -2px 0 var(--accent); }
 
   /* ---- 代码模式工具栏 ---- */
   #codetools {
@@ -140,6 +147,9 @@
   #cmhost .cm-highlightSpace { text-decoration: none; }
   /* md 模式关闭自动换行 */
   body.md-nowrap .vditor-ir .vditor-reset { white-space: pre; overflow-x: auto; }
+  /* 打字机模式：上下各留 40vh，首行/末行都能居中。
+     选择器必须带 #editor：否则特异性 (0,3,1) < (1,2,0)，会被基础 padding 规则覆盖 */
+  body.tw-on #editor .vditor-ir .vditor-reset { padding: 40vh 28px !important; }
   /* !important 必须保留：vditor 初始化时会给容器写内联 height:auto/width:auto/
      display:block，全部要压回 flex 布局（vditor 的根元素就是 #editor 本身）。
      代码模式用 body.code-mode 类切换显隐——不能用内联 display，
@@ -193,15 +203,15 @@
   <button data-act="save" title="Ctrl+S">保存</button>
   <button data-act="saveas" title="Ctrl+Shift+S">另存为</button>
   <span class="sep"></span>
-  <button data-act="linetools" title="合并/拆分行（代码模式）">行工具 ▾</button>
   <button data-act="outline" title="大纲（md 模式）">大纲</button>
+  <button data-act="typewriter" title="打字机模式：光标保持居中滚动">打字机</button>
   <span class="sep"></span>
   <button data-act="pdf">导出 PDF</button>
   <button data-act="exporthtml">导出 HTML</button>
   <button data-act="print">打印</button>
   <span class="sep"></span>
   <button data-act="theme">🌙 暗色</button>
-  <button data-act="help" title="使用说明">？</button>
+  <button data-act="help" title="使用说明">帮助</button>
   <span class="spacer"></span>
   <span id="savestate"></span>
 </header>
@@ -269,6 +279,8 @@ var zoomFactor = parseFloat(localStorage.getItem('mde:zoom')) || 1;
 var lastEditAt = 0;
 var uiWs = localStorage.getItem('mde:ws') === '1';
 var uiWrap = localStorage.getItem('mde:wrap') !== '0';   // 默认开
+var tabsBottom = localStorage.getItem('mde:tabsbottom') === '1';   // 页签置底（默认顶部）
+var typewriter = localStorage.getItem('mde:typewriter') === '1';   // 打字机模式：光标居中滚动
 var cursorHist = [];    // 光标位置历史 { tabId, from, to, line }
 var cursorIdx = -1;
 var navLock = false;
@@ -318,6 +330,7 @@ function renderTabs() {
   tabs.forEach(function (t) {
     var d = document.createElement('div');
     d.className = 'tab' + (t.id === activeId ? ' active' : '');
+    d.dataset.tab = t.id;
     d.title = t.path || t.name;
     var dot = document.createElement('span');
     dot.className = 'dot'; dot.textContent = t.dirty ? '●' : '';
@@ -408,6 +421,7 @@ function cmEnsure(t) {
         if (u.docChanged) {
           lastEditAt = Date.now();
           setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh();
+          cmTypewriterCenter(u);
           if (activeTab() && activeTab().kind === 'code' && cursorHist.length) {
             var top = cursorHist[cursorIdx];
             if (top && top.tabId === activeId && top.from != null) { var sel2 = u.state.selection.main; top.from = sel2.from; top.to = sel2.to; top.line = u.state.doc.lineAt(sel2.head).number; }
@@ -526,7 +540,7 @@ function refreshOutline() {
       var d = document.createElement('div');
       d.className = 'ol-item';
       d.style.paddingLeft = (12 + (lv - 1) * 14) + 'px';
-      d.textContent = h.textContent.trim().slice(0, 50) || '（空标题）';
+      d.textContent = h.textContent.replace(/^#+\s*/, '').trim().slice(0, 50) || '（空标题）';
       d.addEventListener('click', function () {
         var hs = document.querySelectorAll(HS);
         if (hs[i2]) hs[i2].scrollIntoView({ block: 'start' });
@@ -557,7 +571,8 @@ function openRecent(p) {
     var exist = tabs.filter(function (t) { return t.path === p; })[0];
     if (exist) return switchTab(exist.id);
     var NM = String.fromCharCode(92);
-    openIntoTab({ name: p.split(new RegExp('[' + NM + '/]')).pop(), content: r.content, path: p, enc: r.enc });
+    openIntoTab({ name: p.split(new RegExp('[' + NM + '/]')).pop(), content: r.content, path: p, enc: r.enc })
+      .then(function (nt) { if (nt && r.st) nt.st = r.st; });
     addRecent(p);
   });
 }
@@ -662,6 +677,56 @@ function applyWrap() {
   if (cmView) setTimeout(function () { cmView.requestMeasure(); }, 0);
   syncCodeTools();
 }
+function applyTabsPos() {
+  localStorage.setItem('mde:tabsbottom', tabsBottom ? '1' : '0');
+  document.body.classList.toggle('tabs-bottom', tabsBottom);
+}
+applyTabsPos();
+
+/* ---------- 打字机模式：输入时光标行保持居中 ---------- */
+function applyTypewriter() {
+  localStorage.setItem('mde:typewriter', typewriter ? '1' : '0');
+  document.body.classList.toggle('tw-on', typewriter);
+  var b = document.querySelector('[data-act="typewriter"]');
+  if (b) b.classList.toggle('on', typewriter);
+}
+applyTypewriter();
+/* md 模式真实滚动层是 pre.vditor-reset（.vditor-ir 不溢出，滚它无效） */
+function mdScroller() {
+  var r = document.querySelector('.vditor-ir .vditor-reset');
+  if (r && r.scrollHeight > r.clientHeight) return r;
+  return document.querySelector('.vditor-ir');
+}
+function twCenterMd() {
+  var sc = mdScroller();
+  if (!sc) return;
+  var sel = window.getSelection();
+  var rr = (sel && sel.rangeCount) ? sel.getRangeAt(0).getBoundingClientRect() : null;
+  if ((!rr || !rr.height) && sel && sel.anchorNode) {
+    var n = sel.anchorNode;
+    var el = n.nodeType === 3 ? n.parentElement : n;
+    if (!el || !el.closest || !el.closest('.vditor-reset')) return;
+    if (el === sc) return;
+    var er = el.getBoundingClientRect();
+    if (er.height > sc.clientHeight * 0.6) return;   // 拿到的是整个滚动层的 rect，放弃
+    rr = er;
+  }
+  if (!rr || !rr.height) return;
+  var sr = sc.getBoundingClientRect();
+  var delta = rr.top + rr.height / 2 - (sr.top + sr.height / 2);
+  if (delta > 400) delta = 400; else if (delta < -400) delta = -400;
+  if (Math.abs(delta) > 2) sc.scrollTop += delta;
+}
+function typewriterScrollMd() {
+  if (!typewriter || isCodeMode() || !ready) return;
+  // 两段时机：input 回调后 DOM 已重渲染；rAF 再校正一次浏览器自身的"光标滚入"微调
+  setTimeout(function () { twCenterMd(); requestAnimationFrame(twCenterMd); }, 0);
+}
+function cmTypewriterCenter(u) {
+  if (!typewriter || !cmView) return;
+  try { cmView.dispatch({ effects: CM6.EditorView.scrollIntoView(u.state.selection.main.head, { y: 'center' }) }); }
+  catch (e) { /* 旧内核无此 API 时忽略 */ }
+}
 
 /* ---------- 行快捷键（EditPlus 式） ---------- */
 function cmdCopyLine(view) {
@@ -717,20 +782,90 @@ function lineTool(op) {
   toast(tip);
 }
 
-/* ---------- 草稿 ---------- */
+/* ---------- 草稿（桌面版存 userData/drafts/，浏览器版回退 localStorage） ---------- */
 function readDraft(id) {
-  try { var raw = localStorage.getItem('mde:draft:' + id); return raw ? JSON.parse(raw) : null; }
-  catch (e) { return null; }
+  if (window.desktop) return window.desktop.readDraft(id).catch(function () { return null; });
+  try { var raw = localStorage.getItem('mde:draft:' + id); return Promise.resolve(raw ? JSON.parse(raw) : null); }
+  catch (e) { return Promise.resolve(null); }
 }
 function writeDraft(t, content) {
+  if (window.desktop) { window.desktop.writeDraft(t.id, content); return; }
   try { localStorage.setItem('mde:draft:' + t.id, JSON.stringify({ t: content, at: Date.now() })); } catch (e) {}
 }
-function clearDraft(id) { try { localStorage.removeItem('mde:draft:' + id); } catch (e) {} }
+function clearDraft(id) {
+  if (window.desktop) { window.desktop.clearDraft(id); return; }
+  try { localStorage.removeItem('mde:draft:' + id); } catch (e) {}
+}
+/* 旧版本草稿存在 localStorage，启动时一次性迁移到桌面版目录 */
+async function migrateDrafts() {
+  if (!window.desktop) return;
+  var keys = [];
+  try {
+    for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf('mde:draft:') === 0) keys.push(k); }
+  } catch (e) { return; }
+  for (var j = 0; j < keys.length; j++) {
+    try {
+      var raw = localStorage.getItem(keys[j]);
+      if (raw) { var o = JSON.parse(raw); if (o && typeof o.t === 'string') window.desktop.writeDraft(keys[j].slice(10), o.t); }
+      localStorage.removeItem(keys[j]);
+    } catch (e) { /* ignore */ }
+  }
+}
 /* 大文件优化：草稿改为"停止输入 2.5 秒后"落盘，避免长文档周期性整篇序列化 */
 setInterval(function () {
   var t = activeTab();
   if (ready && t && t.dirty && Date.now() - lastEditAt > 2500) writeDraft(t, activeText());
 }, 5000);
+
+/* ---------- 外部变更检测：3 秒轮询 mtime/size，防止静默覆盖 ---------- */
+var staleScanBusy = false;
+async function reloadTabFromDisk(t) {
+  var r = await window.desktop.readPath(t.path);
+  if (r.error) { toast('重载失败：' + r.error); return; }
+  if (r.st) t.st = r.st;
+  t.content = r.content; t.enc = r.enc || t.enc;
+  clearDraft(t.id);
+  t.dirty = false;
+  if (t.id === activeId && ready) {
+    await setEditorText(r.content);
+    scheduleOutlineRefresh();
+  }
+  renderTabs();
+  if (ready) setDirty(activeTab().dirty);
+}
+async function handleExternalChange(t) {
+  if (!t.dirty) { await reloadTabFromDisk(t); toast('「' + t.name + '」已被外部修改，已自动重载'); return; }
+  var idx = await window.desktop.ask({
+    message: '「' + t.name + '」已被其他程序修改',
+    detail: '磁盘上的内容已变化。载入磁盘版本将放弃当前未保存的修改（已有草稿可恢复）。',
+    buttons: ['载入磁盘版本', '保留我的修改']
+  });
+  if (idx === 0) { await reloadTabFromDisk(t); toast('已载入磁盘版本'); }
+  else toast('已保留你的修改；再次保存将覆盖磁盘版本');
+}
+setInterval(function () {
+  if (!ready || !window.desktop || staleScanBusy || document.hidden) return;
+  var targets = tabs.filter(function (t) { return t.path; });
+  if (!targets.length) return;
+  staleScanBusy = true;
+  (async function () {
+    try {
+      for (var i = 0; i < targets.length; i++) {
+        var t = targets[i];
+        var r = await window.desktop.statPath(t.path);
+        if (r.error) {
+          if (!t.gone) { t.gone = true; toast('文件已从磁盘移除：' + t.name); }
+          continue;
+        }
+        t.gone = false;
+        if (!t.st) { t.st = { mtimeMs: r.mtimeMs, size: r.size }; continue; }
+        if (r.mtimeMs === t.st.mtimeMs && r.size === t.st.size) continue;
+        t.st = { mtimeMs: r.mtimeMs, size: r.size };
+        await handleExternalChange(t);
+      }
+    } finally { staleScanBusy = false; }
+  })();
+}, 3000);
 
 /* ---------- 欢迎文档 ---------- */
 var WELCOME = [
@@ -794,7 +929,7 @@ function cacheActive() {
   pushTabCursor(cur);
   cur.content = activeText();
   if (cur.dirty) writeDraft(cur, cur.content);
-  var sc = cur.kind === 'code' ? document.querySelector('#cmhost .cm-scroller') : document.querySelector('.vditor-ir');
+  var sc = cur.kind === 'code' ? document.querySelector('#cmhost .cm-scroller') : mdScroller();
   if (sc) cur.scroll = sc.scrollTop;
 }
 async function activateTab(t) {
@@ -805,7 +940,7 @@ async function activateTab(t) {
   } else {
     await vditor.setValue(t.content || '');
   }
-  var sc = t.kind === 'code' ? document.querySelector('#cmhost .cm-scroller') : document.querySelector('.vditor-ir');
+  var sc = t.kind === 'code' ? document.querySelector('#cmhost .cm-scroller') : mdScroller();
   if (sc) sc.scrollTop = t.scroll || 0;
   setDirty(t.dirty);
   renderTabs();
@@ -824,6 +959,7 @@ async function openIntoTab(opts) {
   if (opts.kind) { t.kind = opts.kind.kind; t.lang = opts.kind.lang; }
   tabs.push(t);
   await activateTab(t);
+  return t;
 }
 function closeTabs(ids) {
   var dirtyCount = ids.filter(function (id) { var t = tabById(id); return t && t.dirty; }).length;
@@ -879,17 +1015,19 @@ async function restoreSession() {
       var s = saved.list[i];
       var content = '';
       var fromDisk = false;
+      var stFromDisk = null;
       if (s.path && window.desktop) {
         var r = await window.desktop.readPath(s.path);
-        if (!r.error) { content = r.content; fromDisk = true; }
+        if (!r.error) { content = r.content; fromDisk = true; stFromDisk = r.st || null; }
       }
-      var d = readDraft(s.id);
+      var d = await readDraft(s.id);
       var dirty = false;
       if (d && d.t && d.t !== content) { content = d.t; dirty = true; }
       else if (d && d.t && !fromDisk) { content = d.t; dirty = s.dirty ? true : false; }
       else if (d && d.t && d.t === content && fromDisk) { clearDraft(s.id); }
       var t = newTabObj(s.name, content, s.path, null);
       t.id = s.id;
+      if (stFromDisk) t.st = stFromDisk;
       var n = parseInt(s.id.slice(1), 10);
       if (!isNaN(n) && n >= tabSeq) tabSeq = n + 1;
       tabs.push(t);
@@ -915,7 +1053,8 @@ async function openFile() {
     if (r.error) return toast('打开失败：' + r.error);
     var exist = tabs.filter(function (t) { return t.path === r.path; })[0];
     if (exist) { await switchTab(exist.id); toast('已切换到 ' + r.name); return; }
-    await openIntoTab({ name: r.name, content: r.content, path: r.path, enc: r.enc });
+    var nt = await openIntoTab({ name: r.name, content: r.content, path: r.path, enc: r.enc });
+    if (nt && r.st) nt.st = r.st;
     addRecent(r.path);
     toast('已打开 ' + r.name);
     return;
@@ -949,6 +1088,7 @@ async function save() {
     if (!t.path) return saveAs();
     var r = await window.desktop.write(t.path, text, t.enc || 'utf-8');
     if (r.error) return toast('保存失败：' + r.error);
+    if (r.st) t.st = r.st;
     clearDraft(t.id); setDirty(false); toast('已保存 ' + t.name);
     return;
   }
@@ -972,6 +1112,7 @@ async function saveAs() {
     if (r.canceled) return;
     if (r.error) return toast('保存失败：' + r.error);
     t.path = r.path; t.name = r.name; t.fh = null;
+    if (r.st) t.st = r.st;
     if (t.kind !== 'code') { var k2 = kindOf(t.name); if (k2.kind === 'code') { t.kind = 'code'; t.lang = k2.lang; cmSetLang(t.lang); } }
     addRecent(r.path);
     clearDraft(t.id); setDirty(false); renderTabs(); toast('已保存 ' + r.name);
@@ -997,6 +1138,25 @@ function newFile(kindObj) {
 
 /* ---------- 导出 ---------- */
 var FALLBACK_CSS = 'body{max-width:800px;margin:40px auto;padding:0 20px;font-family:Georgia,"Microsoft YaHei",serif;line-height:1.7;color:#24292f}pre{background:#f6f8fa;padding:14px;border-radius:6px;overflow:auto}code{background:#f6f8fa;padding:2px 5px;border-radius:4px;font-family:Consolas,monospace;font-size:.9em}pre code{background:none;padding:0}table{border-collapse:collapse;margin:1em 0}th,td{border:1px solid #d0d7de;padding:6px 14px}blockquote{border-left:4px solid #d0d7de;margin:0;padding:0 1em;color:#57606a}img{max-width:100%}';
+/* 导出前把本地相对路径图片（assets/…）转成 dataURL 内嵌，保证导出文件自包含 */
+async function inlineLocalImages(html, t) {
+  if (!window.desktop || !t || !t.path || html.indexOf('<img') < 0) return html;
+  var dir = t.path.replace(/[\\\/][^\\\/]*$/, '');
+  var box = document.createElement('div');
+  box.innerHTML = html;
+  var imgs = box.querySelectorAll('img[src]');
+  for (var i = 0; i < imgs.length; i++) {
+    var src = imgs[i].getAttribute('src') || '';
+    if (!src || /^(data:|https?:|blob:|file:)/i.test(src) || src.charAt(0) === '#') continue;
+    var cands = [src];
+    try { var dec = decodeURIComponent(src); if (cands.indexOf(dec) < 0) cands.push(dec); } catch (e) {}
+    for (var j = 0; j < cands.length; j++) {
+      var r = await window.desktop.readBinary(dir + '/' + cands[j].replace(/^\.\//, ''));
+      if (r && r.ok) { imgs[i].setAttribute('src', 'data:' + r.mime + ';base64,' + r.base64); break; }
+    }
+  }
+  return box.innerHTML;
+}
 async function buildExportHtml() {
   var t = activeTab();
   var css = FALLBACK_CSS;
@@ -1005,7 +1165,7 @@ async function buildExportHtml() {
     var txt = activeText().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     body = '<pre style="font-family:Consolas,monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;margin:0">' + txt + '</pre>';
   } else {
-    body = vditor.getHTML();
+    body = await inlineLocalImages(vditor.getHTML(), t);
     try {
       var main = await fetch('./dist/index.css').then(function (r) { return r.text(); });
       var theme = await fetch('./dist/css/content-theme/light.css').then(function (r) { return r.text(); });
@@ -1053,20 +1213,41 @@ async function exportPdf() {
   return printPdf();
 }
 
-/* ---------- 图片粘贴/拖入 → 内嵌 dataURL ---------- */
+/* ---------- 图片粘贴/拖入 → assets/ 相对引用（未保存文档回退 base64） ---------- */
 function readAsDataURL(f) {
   return new Promise(function (res) {
     var r = new FileReader();
     r.onload = function () { res(r.result); }; r.readAsDataURL(f);
   });
 }
+function abToB64(ab) {
+  var u = new Uint8Array(ab), s = '', CH = 0x8000;
+  for (var i = 0; i < u.length; i += CH) s += String.fromCharCode.apply(null, u.subarray(i, i + CH));
+  return btoa(s);
+}
 async function insertImages(files) {
+  var t = activeTab();
+  if (isCodeMode()) { toast('代码模式不支持插入图片'); return; }
+  if (!vditor) return;
+  var canAssets = !!(window.desktop && t && t.path);
+  if (!canAssets && files.length) toast('未保存的文档：图片将以 base64 内嵌（保存后再粘贴，可存为 assets/ 引用）');
   for (var i = 0; i < files.length; i++) {
     var f = files[i];
-    if (f.type && f.type.indexOf('image/') === 0) {
-      var d = await readAsDataURL(f);
-      vditor.insertValue('\n![](' + d + ')\n');
+    if (!(f.type && f.type.indexOf('image/') === 0)) continue;
+    if (canAssets) {
+      try {
+        var ab = await f.arrayBuffer();
+        var ext = (f.name && /\.[a-z0-9]{1,8}$/i.test(f.name)) ? f.name.split('.').pop().toLowerCase()
+                 : ((f.type.split('/')[1] || 'png').replace('jpeg', 'jpg'));
+        var base = (f.name || ('image-' + Date.now())).replace(/\.[a-z0-9]{1,8}$/i, '') || 'image';
+        var dir = t.path.replace(/[\\\/][^\\\/]*$/, '');
+        var r = await window.desktop.saveImage(dir, base + '.' + ext, abToB64(ab));
+        if (r && r.ok) { vditor.insertValue('\n![](assets/' + r.file + ')\n'); continue; }
+        if (r && r.error) console.warn('image:save 失败，回退 base64：', r.error);
+      } catch (e2) { /* 落回 base64 */ }
     }
+    var d = await readAsDataURL(f);
+    vditor.insertValue('\n![](' + d + ')\n');
   }
 }
 
@@ -1557,14 +1738,42 @@ document.getElementById('tabbar').addEventListener('contextmenu', function (e) {
   e.preventDefault();
   var id = tabEl.dataset.tab;
   var items = [
+    { label: (tabsBottom ? '✓ ' : '') + '页签置于底部', fn: function () { tabsBottom = !tabsBottom; applyTabsPos(); } },
+    { sep: true },
     { label: '关闭标签', danger: true, fn: function () { closeTab(id); } },
     { label: '关闭其他标签', danger: true, fn: function () { closeOthers(id); } },
     { label: '关闭全部标签', danger: true, fn: function () { closeAll(); } }
   ];
   var t = tabById(id);
-  if (t && t.path && window.desktop) items.push({ label: '在资源管理器中显示', fn: function () { window.desktop.openInFolder(t.path); } });
+  if (t && t.path && window.desktop) {
+    items.push({ sep: true });
+    items.push({ label: '历史版本…', fn: function () { showHistoryMenu(t, e.clientX, e.clientY); } });
+    items.push({ label: '在资源管理器中显示', fn: function () { window.desktop.openInFolder(t.path); } });
+  }
   showCtx(e.clientX, e.clientY, items);
 });
+
+/* ---------- 历史版本（每次保存前自动留底，页签右键恢复） ---------- */
+async function showHistoryMenu(t, x, y) {
+  var r = await window.desktop.historyList(t.path);
+  if (!r.ok || !r.items.length) { toast('暂无历史版本（每次保存前自动留底，上限 50 份）'); return; }
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var items = r.items.slice(0, 20).map(function (it) {
+    var d = new Date(it.ms);
+    var label = pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + '  ' + Math.max(1, Math.round(it.size / 1024)) + ' KB';
+    return { label: label, fn: function () { restoreHistory(t, it.file); } };
+  });
+  showCtx(x, y, items);
+}
+async function restoreHistory(t, snapFile) {
+  var r = await window.desktop.readPath(snapFile);
+  if (r.error) return toast('读取历史版本失败：' + r.error);
+  if (t.id !== activeId) await switchTab(t.id);
+  await setEditorText(r.content);
+  t.content = r.content; t.dirty = true;
+  renderTabs(); setDirty(true);
+  toast('已载入历史版本，确认无误后保存');
+}
 
 /* ---------- 页签拖拽排序 ---------- */
 var dragTab = null, lastDragEnd = 0;
@@ -1619,6 +1828,35 @@ window.addEventListener('drop', function (e) {
   } else { insertImages(files); }
 }, true);
 
+/* ---------- 粘贴图片 → assets/ 引用或 base64 ---------- */
+window.addEventListener('paste', function (e) {
+  var cd = e.clipboardData;
+  if (!cd || !cd.files || !cd.files.length) return;
+  if (isCodeMode()) return;
+  var imgs = [];
+  for (var i = 0; i < cd.files.length; i++) {
+    if (cd.files[i].type && cd.files[i].type.indexOf('image/') === 0) imgs.push(cd.files[i]);
+  }
+  if (!imgs.length) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  insertImages(imgs);
+}, true);
+
+/* ---------- 正文链接：交给系统浏览器，防止编辑器窗口被导航 ---------- */
+document.addEventListener('click', function (e) {
+  var el = e.target;
+  var a = el && el.closest ? el.closest('.vditor-reset a[href]') : null;
+  if (!a) return;
+  var href = a.getAttribute('href') || '';
+  if (!href || href.charAt(0) === '#') return;   // 文内锚点放行
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (/^(https?:\/\/|mailto:)/i.test(href)) {
+    if (window.desktop) window.desktop.openExternal(href); else window.open(href, '_blank');
+  } else {
+    toast('该链接不是网页地址，暂不支持在编辑器内打开');
+  }
+}, true);
+
 /* ---------- 快捷键 ---------- */
 window.addEventListener('keydown', function (e) {
   if (e.key === 'F11') { e.preventDefault(); e.stopPropagation(); if (window.desktop) window.desktop.toggleFullscreen(); else document.body.requestFullscreen(); return; }
@@ -1664,6 +1902,7 @@ function applyTheme() {
 /* ---------- 菜单事件 ---------- */
 var ACTIONS = {
   new: newFile, open: openFile, save: save, saveas: saveAs,
+  outline: toggleOutline,
   closetab: function () { closeTab(activeId); },
   'toggle-ws': function () {
     if (!isCodeMode()) { toast('显示空白仅代码模式（非 .md 文件）支持'); return; }
@@ -1678,6 +1917,13 @@ var ACTIONS = {
   exporthtml: exportHtml, pdf: exportPdf,
   print: function () { if (window.desktop) { window.desktop.print(); } else { printPdf(); } },
   theme: function () { dark = !dark; applyTheme(); },
+  typewriter: function () {
+    typewriter = !typewriter; applyTypewriter();
+    if (typewriter) {   // 开启时立即居中一次，给出可见反馈
+      setTimeout(function () { typewriterScrollMd(); if (isCodeMode() && cmView) cmTypewriterCenter({ state: cmView.state }); }, 80);
+    }
+    toast(typewriter ? '打字机模式：开（光标保持居中）' : '打字机模式：关');
+  },
   help: function () {
     if (window.desktop) window.desktop.openHelp();
     else toast('使用说明在程序目录：使用说明.txt');
@@ -1703,18 +1949,6 @@ document.getElementById('menubar').addEventListener('click', function (e) {
     ]);
     return;
   }
-  if (btn.dataset.act === 'linetools') {
-    e.stopPropagation();
-    if (!isCodeMode()) { toast('行工具请在代码模式（非 .md 文件）下使用'); return; }
-    var r = btn.getBoundingClientRect();
-    showCtx(r.left, r.bottom + 4, [
-      { label: '合并一行(单引号)', fn: function () { lineTool('s'); } },
-      { label: '合并一行(双引号)', fn: function () { lineTool('d'); } },
-      { label: '合并一行(无引号)', fn: function () { lineTool('n'); } },
-      { label: '拆分为多行', fn: function () { lineTool('split'); } }
-    ]);
-    return;
-  }
   if (ACTIONS[btn.dataset.act]) ACTIONS[btn.dataset.act]();
 });
 $('fallback-open').addEventListener('change', function () {
@@ -1732,7 +1966,8 @@ if (window.desktop) {
         var exist = tabs.filter(function (t) { return t.path === fp; })[0];
         if (exist) return switchTab(exist.id);
         var NM = String.fromCharCode(92);
-        openIntoTab({ name: fp.split(new RegExp('[' + NM + '/]')).pop(), content: r.content, path: fp, enc: r.enc });
+        openIntoTab({ name: fp.split(new RegExp('[' + NM + '/]')).pop(), content: r.content, path: fp, enc: r.enc })
+          .then(function (nt) { if (nt && r.st) nt.st = r.st; });
         addRecent(fp);
       });
       return;
@@ -1769,10 +2004,10 @@ vditor = new Vditor('editor', {
   upload: {
     handler: function (files) { insertImages(files); return ''; }
   },
-  input: function () { if (ready) { lastEditAt = Date.now(); setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh(); scheduleOutlineRefresh(); } },
+  input: function () { if (ready) { lastEditAt = Date.now(); setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh(); scheduleOutlineRefresh(); typewriterScrollMd(); } },
   after: function () {
     ready = true;
-    restoreSession();
+    migrateDrafts().then(function () { restoreSession(); });
     applyWs(); applyWrap(); applyOutline();
   }
 });

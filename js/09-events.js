@@ -118,9 +118,14 @@ window.addEventListener('paste', function (e) {
 /* ---------- 正文链接：交给系统浏览器，防止编辑器窗口被导航 ---------- */
 document.addEventListener('click', function (e) {
   var el = e.target;
-  var a = el && el.closest ? el.closest('.vditor-reset a[href]') : null;
+  // IR 模式链接渲染为 span[data-type=a]（URL 在 .vditor-ir__marker--link），预览块内才是真 <a>
+  var a = el && el.closest ? el.closest('.vditor-reset a[href], .vditor-reset [data-type="a"]') : null;
   if (!a) return;
-  var href = a.getAttribute('href') || '';
+  var href = a.getAttribute('href');
+  if (!href && a.hasAttribute('data-type')) {
+    var u = a.querySelector('.vditor-ir__marker--link');
+    href = u ? u.textContent.trim() : '';
+  }
   if (!href || href.charAt(0) === '#') return;   // 文内锚点放行
   e.preventDefault(); e.stopImmediatePropagation();
   if (/^(https?:\/\/|mailto:)/i.test(href)) {

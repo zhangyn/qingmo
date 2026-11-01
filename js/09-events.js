@@ -164,3 +164,12 @@ window.addEventListener('beforeunload', function (e) {
   if (anyDirty) { e.preventDefault(); e.returnValue = ''; }
 });
 
+
+/* ---------- md 模式下按住 Win/Alt 拖拽 → 提示仅代码模式支持列选 ---------- */
+document.addEventListener('mousedown', function (e) {
+  if (e.button !== 0 || !(e.metaKey || e.altKey) || !isCodeMode()) return;
+  if (e.target && e.target.closest && e.target.closest('.vditor-reset')) {
+    e.preventDefault();
+    toast('按列选中仅代码模式支持');
+  }
+}, true);

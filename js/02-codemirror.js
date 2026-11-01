@@ -41,7 +41,7 @@ function cmEnsure(t) {
           }
         } else if (u.selectionSet) {
           recordCodeJump();
-          if (Date.now() - __kbSelfAt > 500) kbBlockCancel();   // 非列块自身发起的选区变更（点击/查找跳转等）取消块状态
+          if (!colDrag && Date.now() - __kbSelfAt > 500) kbBlockCancel();   // 拖拽中的选区同步不算外部变更
         }
       })
     ]
@@ -209,6 +209,7 @@ function colBlockLayerEl() {
 }
 function kbBlockCancel() {
   if (!kbBlock) return;
+  console.log('[列块] 取消: ' + (new Error().stack.split(String.fromCharCode(10))[2] || '').trim().slice(0, 70));
   kbBlock = null; colDrag = null;
   if (colBlockLayer) colBlockLayer.innerHTML = '';
 }
@@ -221,6 +222,7 @@ function blockCorners(doc) {
 function drawColBlockOverlay() {
   if (!cmView || !kbBlock) { if (colBlockLayer) colBlockLayer.innerHTML = ''; return; }
   var layer = colBlockLayerEl();
+  console.log('[列块] 绘制覆盖层: 行' + kbBlock.sLine + '-' + kbBlock.hLine + ' 列' + kbBlock.sCol + '-' + kbBlock.hCol);
   layer.innerHTML = '';
   var doc = cmView.state.doc;
   var c = blockCorners(doc);
@@ -332,11 +334,12 @@ function fallbackCopyText(text) {
 function kbBlockKey(e) {
   if (!kbBlock || !cmView || !isCodeMode()) return false;
   var k = e.key || '';
+  if (/^(Alt|Shift|Control|Meta)$/.test(k)) return false;       // 按住修饰键（含连发）不取消块
   if (e.altKey && /^Arrow/.test(k)) return false;              // 列块移动，交给上面的绑定
   if (k === 'Escape') { kbBlockCancel(); return true; }
   if (e.ctrlKey || e.metaKey) {
     var low = k.toLowerCase();
-    if (low === 'c') { copyColToClipboard(colBlockText()); return true; }
+    if (low === 'c') { var CT = colBlockText(); console.log('[列块] Ctrl+C 复制: ' + JSON.stringify(CT)); copyColToClipboard(CT); return true; }
     if (low === 'x') { var txt = colBlockText(); copyColToClipboard(txt); deleteColBlock(); return true; }
     kbBlockCancel(); return false;                             // 其余组合键走默认（docChanged 会清理）
   }
@@ -355,9 +358,11 @@ function colPosAt(e) {
 }
 /* Win+拖拽建立/调整列块（鼠标路径） */
 $('cmhost').addEventListener('mousedown', function (e) {
+  console.log('[列块] mousedown 进入: alt=' + e.altKey + ' meta=' + e.metaKey + ' btn=' + e.button + ' code=' + isCodeMode() + ' 目标=' + (e.target.className || e.target.tagName || '').toString().slice(0, 20));
   kbBlockCancel();
-  if (e.button !== 0 || !(e.metaKey || e.altKey) || !isCodeMode()) return;   // Win 或 Alt 均可启动列块拖选
+  if (e.button !== 0 || !(e.metaKey || e.altKey) || !isCodeMode()) { console.log('[列块] 前置检查未通过'); return; }
   var pos = colPosAt(e);
+  console.log('[列块] pos=' + pos);
   if (pos == null) return;
   e.preventDefault();
   e.stopPropagation();         // 捕获阶段阻断 CM6 自带拖选
@@ -375,8 +380,12 @@ window.addEventListener('mousemove', function (e) {
   var doc = cmView.state.doc, L = doc.lineAt(pos);
   kbBlock.hLine = L.number; kbBlock.hCol = pos - L.from;
   renderColBlock();
+  console.log('[列块] move: 行' + kbBlock.hLine + ' 列' + kbBlock.hCol);
 });
-window.addEventListener('mouseup', function () { colDrag = null; });
+window.addEventListener('mouseup', function () {
+  console.log('[列块] mouseup: 块=' + JSON.stringify(kbBlock));
+  colDrag = null;
+});
 /* 滚动/窗口变化 → 覆盖层跟随 */
 $('cmhost').addEventListener('scroll', function () { if (kbBlock) drawColBlockOverlay(); }, true);
 window.addEventListener('resize', function () { if (kbBlock) drawColBlockOverlay(); });

@@ -481,3 +481,35 @@ $('find-case').addEventListener('click', function () {
 $('repl-one').addEventListener('click', replaceCurrent);
 $('repl-all').addEventListener('click', replaceAll);
 
+
+/* ---------- 选中即高亮其余相同文本（md 模式，CSS Highlight API，不改 DOM） ---------- */
+var selHitsT = null;
+document.addEventListener('selectionchange', function () {
+  clearTimeout(selHitsT);
+  selHitsT = setTimeout(updateSelHits, 200);
+});
+function clearSelHits() {
+  if (window.CSS && CSS.highlights) CSS.highlights.delete('mde-sel-hits');
+}
+function updateSelHits() {
+  if (!window.CSS || !CSS.highlights || !window.Highlight) { return; }
+  if (!ready || isCodeMode() || findState.open) { clearSelHits(); return; }
+  var sel = window.getSelection();
+  if (!sel || sel.rangeCount !== 1 || sel.isCollapsed) { clearSelHits(); return; }
+  var text = sel.toString();
+  if (/\n/.test(text) || /^\s*$/.test(text) || text.length > 100) { clearSelHits(); return; }
+  var needle = text.trim();
+  if (needle.length < 2) { clearSelHits(); return; }   // 单字符不标，避免满屏高亮
+  var root = document.querySelector('.vditor-ir .vditor-reset');
+  if (!root || !sel.anchorNode || !root.contains(sel.anchorNode)) { clearSelHits(); return; }
+  var hits = [], nd = needle.toLowerCase();
+  var segs = collectSegments(root);
+  for (var i = 0; i < segs.length && hits.length < 200; i++) {
+    var seg = segs[i], lower = seg.text.toLowerCase(), pos = 0;
+    while ((pos = lower.indexOf(nd, pos)) >= 0 && hits.length < 200) {
+      hits.push(offsetToRange(seg, pos, pos + needle.length));
+      pos += needle.length;
+    }
+  }
+  CSS.highlights.set('mde-sel-hits', new Highlight(...hits));
+}

@@ -23,6 +23,7 @@ function cmEnsure(t) {
       CM6.keymap.of([CM6.defaultKeymap, CM6.historyKeymap, CM6.foldKeymap, CM6.indentWithTab]),
       CM6.search(),
       CM6.highlightSelectionMatches(),
+      CM6.rectangularSelection(),   // Alt+拖拽按列选中
       CM6.syntaxHighlighting(CM6.defaultHighlightStyle, { fallback: true }),
       cmWsComp.of(uiWs ? [CM6.highlightWhitespace(), CM6.highlightTrailingWhitespace()] : []),
       cmWrapComp.of(uiWrap ? CM6.EditorView.lineWrapping : []),
@@ -182,3 +183,39 @@ function lineTool(op) {
   toast(tip);
 }
 
+
+/* ---------- Win/Alt + 拖拽按列选中（仅代码模式；md 为 contenteditable 无法列选） ---------- */
+var colSel = null;   // 列选起点文档位置
+function colPosAt(e) {
+  if (!cmView) return null;
+  try { return cmView.posAtCoords({ x: e.clientX, y: e.clientY }); } catch (err) { return null; }
+}
+function colES() { return cmView.state.selection.constructor; }   // bundle 未导出 EditorSelection，从实例取构造器
+function applyColSelect(anchor, head) {
+  if (!cmView || head == null) return;
+  var doc = cmView.state.doc;
+  var aL = doc.lineAt(anchor), hL = doc.lineAt(head);
+  var fromL = Math.min(aL.number, hL.number), toL = Math.max(aL.number, hL.number);
+  var cL = Math.min(anchor - aL.from, head - hL.from), cR = Math.max(anchor - aL.from, head - hL.from);
+  var ranges = [];
+  for (var ln = fromL; ln <= toL; ln++) {
+    var line = doc.line(ln);
+    ranges.push(colES().range(line.from + Math.min(cL, line.length), line.from + Math.min(cR, line.length)));
+  }
+  if (ranges.length) cmView.dispatch({ selection: colES().create(ranges), scrollIntoView: true });
+}
+$('cmhost').addEventListener('mousedown', function (e) {
+  if (e.button !== 0 || !e.metaKey || !isCodeMode()) return;   // 仅 Win 键（Alt 由内核 rectangularSelection 处理）
+  var pos = colPosAt(e);
+  if (pos == null) return;
+  e.preventDefault();          // 阻断原生拖选
+  e.stopPropagation();         // 捕获阶段阻断 CM6 自带拖选跟踪接管本次按下
+  if (!cmView.hasFocus) cmView.focus();   // 未聚焦时 view 会把多选区收缩为单一选区，必须先聚焦
+  colSel = pos;
+}, true);
+window.addEventListener('mousemove', function (e) {
+  if (colSel == null) return;
+  e.preventDefault();
+  applyColSelect(colSel, colPosAt(e));
+});
+window.addEventListener('mouseup', function () { colSel = null; });

@@ -137,7 +137,15 @@ document.addEventListener('click', function (e) {
 
 
 /* ---------- 快捷键 ---------- */
+var altArrowTipAt = 0;
 window.addEventListener('keydown', function (e) {
+  // md 模式按 Alt+方向键：列块选择仅代码模式支持，给出提示避免"静默无反应"
+  if (e.altKey && !e.ctrlKey && !e.shiftKey && /^Arrow/.test(e.key || '') && !isCodeMode()) {
+    e.preventDefault();
+    var now = Date.now();
+    if (now - altArrowTipAt > 2500) { altArrowTipAt = now; toast('列块选择（Alt+方向键）仅代码模式支持'); }
+    return;
+  }
   if (e.key === 'F11') { e.preventDefault(); e.stopPropagation(); if (window.desktop) window.desktop.toggleFullscreen(); else document.body.requestFullscreen(); return; }
   if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 'p') { e.preventDefault(); e.stopPropagation(); ACTIONS.print(); return; }
   if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomFactor = Math.min(3, zoomFactor * 1.1); applyZoom(); return; }

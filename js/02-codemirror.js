@@ -158,8 +158,10 @@ var LINE_KEYMAP = [
   { key: 'Alt-ArrowRight', run: function (v) { return kbBlockArrow(0, 1); } },
   { key: 'Alt-ArrowLeft', run: function (v) { return kbBlockArrow(0, -1); } },
   { any: function (v, e) { return kbBlockKey(e); } },
-  { key: 'Ctrl-c', run: function (v) { if (!v.state.selection.main.empty) return false; return cmdCopyLine(v); } },
-  { key: 'Ctrl-x', run: function (v) { if (!v.state.selection.main.empty) return false; return cmdCutLine(v); } }
+  { key: 'Ctrl-c', run: function (v) { if (kbBlock) return false;   // 列块激活时交给 any → kbBlockKey 复制列文本
+      if (!v.state.selection.main.empty) return false; return cmdCopyLine(v); } },
+  { key: 'Ctrl-x', run: function (v) { if (kbBlock) return false;
+      if (!v.state.selection.main.empty) return false; return cmdCutLine(v); } }
 ];
 
 
@@ -313,6 +315,20 @@ function deleteColBlock() {
   drawColBlockOverlay();
 }
 /* 块激活期间的按键分发（CM6 keymap any 入口） */
+function copyColToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(function () { fallbackCopyText(text); });
+  } else fallbackCopyText(text);
+}
+function fallbackCopyText(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+  ta.remove();
+}
 function kbBlockKey(e) {
   if (!kbBlock || !cmView || !isCodeMode()) return false;
   var k = e.key || '';
@@ -320,8 +336,8 @@ function kbBlockKey(e) {
   if (k === 'Escape') { kbBlockCancel(); return true; }
   if (e.ctrlKey || e.metaKey) {
     var low = k.toLowerCase();
-    if (low === 'c') { if (navigator.clipboard) navigator.clipboard.writeText(colBlockText()); return true; }
-    if (low === 'x') { var txt = colBlockText(); if (navigator.clipboard) navigator.clipboard.writeText(txt); deleteColBlock(); return true; }
+    if (low === 'c') { copyColToClipboard(colBlockText()); return true; }
+    if (low === 'x') { var txt = colBlockText(); copyColToClipboard(txt); deleteColBlock(); return true; }
     kbBlockCancel(); return false;                             // 其余组合键走默认（docChanged 会清理）
   }
   if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight') { kbBlockCancel(); return false; }

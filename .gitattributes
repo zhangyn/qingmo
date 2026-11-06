@@ -1,0 +1,15 @@
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF，否则 goto/label 在某些环境下会失效
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制：不要做任何行尾/编码转换
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.zip binary
+*.exe binary

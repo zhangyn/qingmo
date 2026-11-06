@@ -6,13 +6,38 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-packager . qingmo --platform=win32 --arch=x64 --out=out --overwrite --icon=app.ico --executable-name=QingMo --ignore=\"^/web\" --ignore=\"^/out\" --prune"
+    "build:cm6": "node scripts/build-cm6.mjs",
+    "lint": "eslint .",
+    "lint:globals": "node scripts/gen-eslint-globals.mjs",
+    "test": "node test/path-guard.test.js",
+    "smoke": "electron test/smoke.js",
+    "smoke:app": "electron test/app-smoke.js",
+    "dist": "electron-packager . qingmo --platform=win32 --arch=x64 --out=out --overwrite --icon=app.ico --executable-name=QingMo --ignore=\"^/web\" --ignore=\"^/out\" --ignore=\"^/test\" --ignore=\"^/src\" --ignore=\"^/scripts\" --ignore=\"^/eslint\" --prune"
   },
   "dependencies": {
     "iconv-lite": "^0.6.3"
   },
   "devDependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.7.0",
+    "@codemirror/lang-cpp": "^6.0.2",
+    "@codemirror/lang-css": "^6.3.0",
+    "@codemirror/lang-html": "^6.4.9",
+    "@codemirror/lang-java": "^6.0.1",
+    "@codemirror/lang-javascript": "^6.2.2",
+    "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/lang-python": "^6.1.6",
+    "@codemirror/lang-sql": "^6.8.0",
+    "@codemirror/lang-xml": "^6.1.0",
+    "@codemirror/language": "^6.10.0",
+    "@codemirror/search": "^6.5.0",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.34.0",
     "@electron/packager": "^18.3.6",
-    "electron": "^33.0.0"
+    "@lezer/highlight": "^1.2.0",
+    "electron": "^33.0.0",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.15.0",
+    "globals": "^15.12.0"
   }
 }

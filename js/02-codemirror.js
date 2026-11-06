@@ -1,66 +1,125 @@
 'use strict';
-/* ---------- 代码模式（CodeMirror 6） ---------- */
-function cmEnsure(t) {
-  if (cmView) return cmView;
+/* ---------- 调试输出 ----------
+   仅在带 ?debug 打开时生效（主进程用 --qingmo-debug 启动才会传这个参数），
+   生产环境完全静默：避免拖拽路径上每个事件都走一次 console → 主进程同步写盘 */
+var MDE_DEBUG = location.search.indexOf('debug') >= 0;
+function dbg() {
+  if (!MDE_DEBUG) return;
+  try { console.log.apply(console, arguments); } catch (e) { /* ignore */ }
+}
+
+/* ---------- 代码模式（CodeMirror 6） ----------
+   每个标签页各持一个 EditorState（切页时 setState，见 js/06-session.js）：
+   撤销栈、选区、折叠状态都不再在标签之间串味，切页也不需要整篇替换文档。
+   内存：只缓存最近 CM_STATE_MAX 个 state，超出的按最久未用淘汰
+   （被淘汰的标签丢掉的是撤销历史，正文仍保存在 t.content 里）。 */
+var CM_STATE_MAX = 12;
+var cmStateOrder = [];                  // 最近使用的 tab.id，末尾最新
+var langExtCache = Object.create(null);
+
+function langExtOf(lang) {
+  if (!lang || !CM6.langs || !CM6.langs[lang]) return [];
+  if (!langExtCache[lang]) langExtCache[lang] = CM6.langs[lang]();   // LanguageSupport 可跨 state 共享
+  return langExtCache[lang];
+}
+function cmInitCompartments() {
+  if (cmLangComp) return;
   cmLangComp = new CM6.Compartment();
   cmWsComp = new CM6.Compartment();
   cmWrapComp = new CM6.Compartment();
-  cmView = new CM6.EditorView({
-    doc: '',
-    parent: $('cmhost'),
-    extensions: [
-      CM6.lineNumbers(),
-      CM6.highlightActiveLineGutter(),
-      CM6.highlightActiveLine(),
-      CM6.drawSelection(),
-      CM6.dropCursor(),
-      CM6.bracketMatching(),
-      CM6.foldGutter(),
-      CM6.history(),
-      CM6.closeBrackets(),
-      CM6.keymap.of(CM6.closeBracketsKeymap),
-      CM6.keymap.of(LINE_KEYMAP),
-      CM6.keymap.of([CM6.defaultKeymap, CM6.historyKeymap, CM6.foldKeymap, CM6.indentWithTab]),
-      CM6.search(),
-      CM6.highlightSelectionMatches(),
-
-      CM6.syntaxHighlighting(CM6.defaultHighlightStyle, { fallback: true }),
+}
+function cmSharedExts() {
+  return [
+    CM6.lineNumbers(),
+    CM6.highlightActiveLineGutter(),
+    CM6.highlightActiveLine(),
+    CM6.drawSelection(),
+    CM6.dropCursor(),
+    CM6.bracketMatching(),
+    CM6.foldGutter(),
+    CM6.history({ minDepth: 400, newGroupDelay: 100 }),   // 默认 newGroupDelay=500 会把 500ms 内的输入合成一步
+    CM6.closeBrackets(),
+    CM6.keymap.of(CM6.closeBracketsKeymap),
+    CM6.keymap.of(LINE_KEYMAP),
+    CM6.keymap.of([CM6.defaultKeymap, CM6.historyKeymap, CM6.foldKeymap, CM6.indentWithTab]),
+    CM6.search(),
+    CM6.highlightSelectionMatches(),
+    CM6.syntaxHighlighting(CM6.defaultHighlightStyle, { fallback: true }),
+    CM6.EditorView.updateListener.of(function (u) {
+      if (!ready) return;
+      if (u.docChanged) {
+        lastEditAt = Date.now();
+        setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh();
+        cmTypewriterCenter(u);
+        if (Date.now() - __kbSelfAt > 500) kbBlockCancel();   // 非列块自身发起的文档变更（撤销/外部编辑等）取消块状态
+        if (activeTab() && activeTab().kind === 'code' && cursorHist.length) {
+          var top = cursorHist[cursorIdx];
+          if (top && top.tabId === activeId && top.from != null) { var sel2 = u.state.selection.main; top.from = sel2.from; top.to = sel2.to; top.line = u.state.doc.lineAt(sel2.head).number; }
+        }
+      } else if (u.selectionSet) {
+        recordCodeJump();
+        if (!colDrag && Date.now() - __kbSelfAt > 500) kbBlockCancel();   // 拖拽中的选区同步不算外部变更
+      }
+    })
+  ];
+}
+/* 该标签自己的 state（首次访问时按 t.content 创建） */
+function cmStateFor(t) {
+  cmInitCompartments();
+  if (t.cmState) { cmTouchState(t.id); return t.cmState; }
+  t.cmState = CM6.EditorState.create({
+    doc: t.content || '',
+    extensions: cmSharedExts().concat([
       cmWsComp.of(uiWs ? [CM6.highlightWhitespace(), CM6.highlightTrailingWhitespace()] : []),
       cmWrapComp.of(uiWrap ? CM6.EditorView.lineWrapping : []),
-      cmLangComp.of(t && t.lang && CM6.langs[t.lang] ? CM6.langs[t.lang]() : []),
-      CM6.EditorView.updateListener.of(function (u) {
-        if (!ready) return;
-        if (u.docChanged) {
-          lastEditAt = Date.now();
-          setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh();
-          cmTypewriterCenter(u);
-          if (Date.now() - __kbSelfAt > 500) kbBlockCancel();   // 非列块自身发起的文档变更（撤销/外部编辑等）取消块状态
-          if (activeTab() && activeTab().kind === 'code' && cursorHist.length) {
-            var top = cursorHist[cursorIdx];
-            if (top && top.tabId === activeId && top.from != null) { var sel2 = u.state.selection.main; top.from = sel2.from; top.to = sel2.to; top.line = u.state.doc.lineAt(sel2.head).number; }
-          }
-        } else if (u.selectionSet) {
-          recordCodeJump();
-          if (!colDrag && Date.now() - __kbSelfAt > 500) kbBlockCancel();   // 拖拽中的选区同步不算外部变更
-        }
-      })
-    ]
+      cmLangComp.of(langExtOf(t.lang))
+    ])
+  });
+  cmTouchState(t.id);
+  return t.cmState;
+}
+function cmTouchState(id) {
+  var i = cmStateOrder.indexOf(id);
+  if (i >= 0) cmStateOrder.splice(i, 1);
+  cmStateOrder.push(id);
+  while (cmStateOrder.length > CM_STATE_MAX) {
+    var old = cmStateOrder[0];
+    if (old === activeId) { cmStateOrder.push(cmStateOrder.shift()); break; }   // 不动当前标签
+    cmStateOrder.shift();
+    var ot = tabById(old);
+    if (ot) ot.cmState = null;
+  }
+}
+function cmEnsure(t) {
+  if (cmView) return cmView;
+  cmInitCompartments();
+  cmView = new CM6.EditorView({
+    state: cmStateFor(t),
+    parent: $('cmhost')
   });
   return cmView;
 }
-function cmSetLang(langName) {
+/* setState 后把当前 UI 开关（lang / 空白 / 换行）重新应用到这份 state 上，
+   否则新建 state 时烘焙进去的配置会落后于用户后来拨过的开关 */
+function cmSyncConfig(t) {
   if (!cmView || !cmLangComp) return;
-  var ext = (langName && CM6.langs[langName]) ? CM6.langs[langName]() : [];
-  cmView.dispatch({ effects: cmLangComp.reconfigure(ext) });
+  cmView.dispatch({ effects: [
+    cmLangComp.reconfigure(langExtOf(t && t.lang)),
+    cmWsComp.reconfigure(uiWs ? [CM6.highlightWhitespace(), CM6.highlightTrailingWhitespace()] : []),
+    cmWrapComp.reconfigure(uiWrap ? CM6.EditorView.lineWrapping : [])
+  ] });
 }
 function applyEditorKind(t) {
+  t = t || activeTab();
   var kind = (t && t.kind) || 'md';
   editorKind = kind;
   document.body.classList.toggle('code-mode', kind === 'code');
   applyOutline();
   if (kind === 'code') {
+    var st = cmStateFor(t);
     cmEnsure(t);
-    cmSetLang(t.lang);
+    if (cmView.state !== st) cmView.setState(st);
+    cmSyncConfig(t);
     setTimeout(function () { if (cmView) cmView.requestMeasure(); }, 0);
   }
 }
@@ -69,8 +128,83 @@ function activeText() {
   return isCodeMode() ? cmView.state.doc.toString() : vditor.getValue();
 }
 function setEditorText(text) {
-  if (isCodeMode()) cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: text } });
-  else return vditor.setValue(text);
+  if (isCodeMode()) {
+    cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: text } });
+  } else {
+    vditor.setValue(text);
+    focusEditor();          // 先把光标/选区落定，压栈内容与延迟回调才一致
+    // Vditor 的 setValue 要等 undoDelay 后才把这一改压进撤销栈，
+    // 用户“改完立刻 Ctrl+Z”正好落在这个空窗口里 → 表现为没反应。这里立刻补一条，
+    // 并取消内核排的那次压栈，否则会多加一条假记录（一次撤销只回退一半）。
+    vdFlushUndo();
+    scheduleOutlineRefresh();   // 取消延迟回调后，它原本负责的刷新要自己补上
+    scheduleFindRefresh();
+  }
+  // 批量改写的入口都是查换栏/页签菜单上的按钮，焦点不在正文上，
+  // 不还回去的话 Ctrl+Z 根本到不了编辑器
+  focusEditor();
+}
+/* 把焦点还给正文编辑器（代码模式给 CM6，md 模式给 IR 编辑区） */
+function focusEditor() {
+  try {
+    if (isCodeMode()) { if (cmView) cmView.focus(); return; }
+    var v = vditor && vditor.vditor;
+    if (v && v.ir && v.ir.element) v.ir.element.focus();
+  } catch (e) { /* ignore */ }
+}
+
+/* ---------- 撤销/重做的统一入口 ----------
+   焦点在正文里时交给内核自己处理（不拦截，避免双重撤销）；
+   焦点跑到工具栏按钮/页签上时（比如刚点完「行首」「替换」），把 Ctrl+Z 转发给编辑器。
+   焦点在输入框里则放行——那里应该是撤销输入框里的文字。 */
+function editorHasFocus() {
+  try {
+    if (isCodeMode()) return !!(cmView && cmView.hasFocus);
+    var v = vditor && vditor.vditor;
+    var ae = document.activeElement;
+    return !!(v && v.ir && v.ir.element && ae && (ae === v.ir.element || v.ir.element.contains(ae)));
+  } catch (e) { return false; }
+}
+function focusInTextInput() {
+  var el = document.activeElement;
+  if (!el) return false;
+  var tag = (el.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  return !!el.isContentEditable && !editorHasFocus();
+}
+function appUndo(redo) {
+  try {
+    if (isCodeMode()) {
+      if (!cmView) return false;
+      var bind = redo ? CM6.historyKeymap[1] : CM6.historyKeymap[0];   // Mod-z / Mod-y
+      if (!bind || typeof bind.run !== 'function') return false;
+      return bind.run(cmView) !== false;
+    }
+    var v = vditor && vditor.vditor;
+    if (!v || !v.undo) return false;
+    if (redo) v.undo.redo(v); else v.undo.undo(v);
+    return true;
+  } catch (e) { return false; }
+}
+/* 取消内核排队的“延迟压栈”（setValue 之后 undoDelay 时才会执行的那次） */
+function vdCancelPendingUndo() {
+  try {
+    var v = vditor && vditor.vditor;
+    if (v && v.ir) clearTimeout(v.ir.processTimeoutId);
+  } catch (e) { /* ignore */ }
+}
+/* 立即把当前内容压入 Vditor 的撤销栈，并取消排队的延迟压栈 */
+function vdFlushUndo() {
+  vdCancelPendingUndo();
+  try {
+    var v = vditor && vditor.vditor;
+    if (v && v.undo && typeof v.undo.addToUndoStack === 'function') v.undo.addToUndoStack(v);
+  } catch (e) { /* 内核差异时忽略 */ }
+}
+/* 切标签：撤销栈只保留本标签当前内容，否则 Ctrl+Z 能把上一个文件的内容倒回来 */
+function vdResetUndo() {
+  vdCancelPendingUndo();     // 先掐掉 setValue 排的那次压栈，否则基线后面会多一条
+  try { if (vditor && typeof vditor.clearStack === 'function') vditor.clearStack(); } catch (e) { /* ignore */ }
 }
 function applyZoom() {
   localStorage.setItem('mde:zoom', String(zoomFactor));
@@ -147,8 +281,8 @@ function cmdCutLine(view) {
   return true;
 }
 var LINE_KEYMAP = [
-  { key: 'Tab', run: function (v) { v.dispatch(v.state.replaceSelection('	')); return true; } },
-  { key: 'Shift-Tab', run: function (v) { CM6.indentLess(v); return true; } },
+  // Tab / Shift-Tab 不自己绑定：已装入的 indentWithTab（Tab → indentMore）与 defaultKeymap
+  // 里的 indentLess 已经覆盖。自己绑 replaceSelection('\t') 会把整段多行选区换成一个 \t。
   { key: 'Ctrl-y', run: function (v) { CM6.deleteLine(v); return true; } },
   { key: 'Ctrl-d', run: function (v) { CM6.copyLineDown(v); return true; } },
   { key: 'Ctrl-Shift-ArrowUp', run: function (v) { CM6.moveLineUp(v); return true; } },
@@ -209,7 +343,7 @@ function colBlockLayerEl() {
 }
 function kbBlockCancel() {
   if (!kbBlock) return;
-  console.log('[列块] 取消: ' + (new Error().stack.split(String.fromCharCode(10))[2] || '').trim().slice(0, 70));
+  if (MDE_DEBUG) dbg('[列块] 取消: ' + (new Error().stack.split(String.fromCharCode(10))[2] || '').trim().slice(0, 70));
   kbBlock = null; colDrag = null;
   if (colBlockLayer) colBlockLayer.innerHTML = '';
 }
@@ -222,11 +356,10 @@ function blockCorners(doc) {
 function drawColBlockOverlay() {
   if (!cmView || !kbBlock) { if (colBlockLayer) colBlockLayer.innerHTML = ''; return; }
   var layer = colBlockLayerEl();
-  console.log('[列块] 绘制覆盖层: 行' + kbBlock.sLine + '-' + kbBlock.hLine + ' 列' + kbBlock.sCol + '-' + kbBlock.hCol);
+  dbg('[列块] 绘制覆盖层: 行' + kbBlock.sLine + '-' + kbBlock.hLine + ' 列' + kbBlock.sCol + '-' + kbBlock.hCol);
   layer.innerHTML = '';
   var doc = cmView.state.doc;
   var c = blockCorners(doc);
-  var lh = null;
   for (var ln = c.fromL; ln <= c.toL; ln++) {
     var line = doc.line(ln);
     var f = cmView.coordsAtPos(line.from + Math.min(c.cL, line.length));
@@ -237,7 +370,6 @@ function drawColBlockOverlay() {
     rect.style.cssText = 'position:fixed;pointer-events:none;background:rgba(126,160,255,.30);' +
       'left:' + left + 'px;top:' + f.top + 'px;width:' + Math.max(2, right - left) + 'px;height:' + (f.bottom - f.top) + 'px';
     layer.appendChild(rect);
-    lh = f.bottom - f.top;
   }
 }
 function renderColBlock() {
@@ -339,7 +471,7 @@ function kbBlockKey(e) {
   if (k === 'Escape') { kbBlockCancel(); return true; }
   if (e.ctrlKey || e.metaKey) {
     var low = k.toLowerCase();
-    if (low === 'c') { var CT = colBlockText(); console.log('[列块] Ctrl+C 复制: ' + JSON.stringify(CT)); copyColToClipboard(CT); return true; }
+    if (low === 'c') { var CT = colBlockText(); dbg('[列块] Ctrl+C 复制: ' + JSON.stringify(CT)); copyColToClipboard(CT); return true; }
     if (low === 'x') { var txt = colBlockText(); copyColToClipboard(txt); deleteColBlock(); return true; }
     kbBlockCancel(); return false;                             // 其余组合键走默认（docChanged 会清理）
   }
@@ -358,11 +490,11 @@ function colPosAt(e) {
 }
 /* Win+拖拽建立/调整列块（鼠标路径） */
 $('cmhost').addEventListener('mousedown', function (e) {
-  console.log('[列块] mousedown 进入: alt=' + e.altKey + ' meta=' + e.metaKey + ' btn=' + e.button + ' code=' + isCodeMode() + ' 目标=' + (e.target.className || e.target.tagName || '').toString().slice(0, 20));
+  dbg('[列块] mousedown 进入: alt=' + e.altKey + ' meta=' + e.metaKey + ' btn=' + e.button + ' code=' + isCodeMode() + ' 目标=' + (e.target.className || e.target.tagName || '').toString().slice(0, 20));
   kbBlockCancel();
-  if (e.button !== 0 || !(e.metaKey || e.altKey) || !isCodeMode()) { console.log('[列块] 前置检查未通过'); return; }
+  if (e.button !== 0 || !(e.metaKey || e.altKey) || !isCodeMode()) { dbg('[列块] 前置检查未通过'); return; }
   var pos = colPosAt(e);
-  console.log('[列块] pos=' + pos);
+  dbg('[列块] pos=' + pos);
   if (pos == null) return;
   e.preventDefault();
   e.stopPropagation();         // 捕获阶段阻断 CM6 自带拖选
@@ -372,18 +504,28 @@ $('cmhost').addEventListener('mousedown', function (e) {
   colDrag = true;
   renderColBlock();
 }, true);
+/* 拖拽：每帧最多重算一次（posAtCoords + 逐行 coordsAtPos 都会触发强制布局，
+   直接跟着 mousemove 跑是拖拽卡顿的主因） */
+var colMoveRaf = 0, colMoveEv = null;
 window.addEventListener('mousemove', function (e) {
   if (!colDrag || !cmView) return;
   e.preventDefault();
-  var pos = colPosAt(e);
-  if (pos == null) return;
-  var doc = cmView.state.doc, L = doc.lineAt(pos);
-  kbBlock.hLine = L.number; kbBlock.hCol = pos - L.from;
-  renderColBlock();
-  console.log('[列块] move: 行' + kbBlock.hLine + ' 列' + kbBlock.hCol);
+  colMoveEv = { clientX: e.clientX, clientY: e.clientY };
+  if (colMoveRaf) return;
+  colMoveRaf = requestAnimationFrame(function () {
+    colMoveRaf = 0;
+    var ev = colMoveEv; colMoveEv = null;
+    if (!ev || !colDrag || !kbBlock || !cmView) return;
+    var pos = colPosAt(ev);
+    if (pos == null) return;
+    var doc = cmView.state.doc, L = doc.lineAt(pos);
+    kbBlock.hLine = L.number; kbBlock.hCol = pos - L.from;
+    renderColBlock();
+    dbg('[列块] move: 行' + kbBlock.hLine + ' 列' + kbBlock.hCol);
+  });
 });
 window.addEventListener('mouseup', function () {
-  console.log('[列块] mouseup: 块=' + JSON.stringify(kbBlock));
+  dbg('[列块] mouseup: 块=' + JSON.stringify(kbBlock));
   colDrag = null;
 });
 /* 滚动/窗口变化 → 覆盖层跟随 */

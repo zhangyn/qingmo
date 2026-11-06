@@ -13,6 +13,7 @@ var lastEditAt = 0;
 var uiWs = localStorage.getItem('mde:ws') === '1';
 var uiWrap = localStorage.getItem('mde:wrap') !== '0';   // 默认开
 var tabsBottom = localStorage.getItem('mde:tabsbottom') === '1';   // 页签置底（默认顶部）
+var menuVisible = localStorage.getItem('mde:menubar') !== '0';      // 菜单栏显隐（默认显示）
 var typewriter = localStorage.getItem('mde:typewriter') === '1';   // 打字机模式：光标居中滚动
 var cursorHist = [];    // 光标位置历史 { tabId, from, to, line }
 var cursorIdx = -1;
@@ -60,6 +61,8 @@ function newTabObj(name, content, path, fh) {
 }
 function renderTabs() {
   var bar = $('tabbar');
+  var mt = $('tabmenu-toggle');   // 静态节点（editor.html）：重建页签时先摘下、再挂回末尾
+  if (mt && mt.parentNode) mt.parentNode.removeChild(mt);
   bar.innerHTML = '';
   tabs.forEach(function (t) {
     var d = document.createElement('div');
@@ -78,6 +81,7 @@ function renderTabs() {
     d.addEventListener('click', function () { if (Date.now() - lastDragEnd < 250) return; switchTab(t.id); });
     bar.appendChild(d);
   });
+  if (mt) bar.appendChild(mt);   // 菜单栏开关常驻页签栏右端：菜单栏隐藏后仍有可见入口
   persistTabs();
 }
 /* 标签标题：取正文第一个非空行（# 标题自动去掉井号），空文档回退到文件名 */

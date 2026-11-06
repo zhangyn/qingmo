@@ -71,7 +71,11 @@ async function saveAs() {
     if (r.error) return toast('保存失败：' + r.error);
     t.path = r.path; t.name = r.name; t.fh = null;
     if (r.st) t.st = r.st;
-    if (t.kind !== 'code') { var k2 = kindOf(t.name); if (k2.kind === 'code') { t.kind = 'code'; t.lang = k2.lang; cmSetLang(t.lang); } }
+    if (t.kind !== 'code') {
+      var k2 = kindOf(t.name);
+      // 另存为代码文件：同步切到代码编辑器（先把刚保存的正文交给它，否则 state 会按旧内容重建）
+      if (k2.kind === 'code') { t.kind = 'code'; t.lang = k2.lang; t.content = text; applyEditorKind(t); }
+    }
     addRecent(r.path);
     clearDraft(t.id); setDirty(false); renderTabs(); toast('已保存 ' + r.name);
     return;
@@ -90,8 +94,9 @@ async function saveAs() {
   } else fallbackSave(text);
 }
 function newFile(kindObj) {
+  // 总是返回新标签的 Promise：调用方 await 才能保证切换完成
   if (kindObj) return openIntoTab({ name: '未命名', content: '', kind: kindObj });
-  openIntoTab({ name: '未命名', content: '' });
+  return openIntoTab({ name: '未命名', content: '' });
 }
 
 
@@ -126,9 +131,15 @@ async function buildExportHtml() {
   } else {
     body = await inlineLocalImages(vditor.getHTML(), t);
     try {
-      var main = await fetch('./dist/index.css').then(function (r) { return r.text(); });
-      var theme = await fetch('./dist/css/content-theme/light.css').then(function (r) { return r.text(); });
-      css = main + '\n' + theme;
+      // 桌面版：由主进程直读内置内核 CSS（渲染层不再用 fetch 读本地文件）
+      var pair = window.desktop && window.desktop.exportCss ? await window.desktop.exportCss() : null;
+      if (pair && pair.css) {
+        css = pair.css;
+      } else {
+        var main = await fetch('./dist/index.css').then(function (r) { return r.text(); });
+        var theme = await fetch('./dist/css/content-theme/light.css').then(function (r) { return r.text(); });
+        css = main + '\n' + theme;
+      }
     } catch (e) { body = '<div style="' + 'max-width:800px;margin:40px auto' + '">' + body + '</div>'; }
   }
   return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>' +

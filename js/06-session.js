@@ -61,17 +61,21 @@ function cacheActive() {
   if (!cur || !ready) return;
   pushTabCursor(cur);
   cur.content = activeText();
+  // 代码模式：把当前 state 挂回该标签（撤销栈/选区/折叠随标签走，不被下一次切页冲掉）
+  if (cur.kind === 'code' && cmView) cur.cmState = cmView.state;
   if (cur.dirty) writeDraft(cur, cur.content);
   var sc = cur.kind === 'code' ? document.querySelector('#cmhost .cm-scroller') : mdScroller();
   if (sc) cur.scroll = sc.scrollTop;
 }
 async function activateTab(t) {
   activeId = t.id;
+  // 代码模式：applyEditorKind 内部会 setState 到该标签自己的 EditorState，
+  // 不再做“整篇替换文档”那一步（那会把切页写进撤销栈，Ctrl+Z 能把另一个文件的内容倒进来）
   applyEditorKind(t);
-  if (t.kind === 'code') {
-    cmView.dispatch({ changes: { from: 0, to: cmView.state.doc.length, insert: t.content || '' } });
-  } else {
+  if (t.kind !== 'code') {
     await vditor.setValue(t.content || '');
+    vdResetUndo();     // 基线撤销点 = 本标签当前内容（防止撤销跨标签）
+    scheduleCodeBlockHl();
   }
   var sc = t.kind === 'code' ? document.querySelector('#cmhost .cm-scroller') : mdScroller();
   if (sc) sc.scrollTop = t.scroll || 0;

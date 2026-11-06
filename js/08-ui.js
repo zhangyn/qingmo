@@ -156,6 +156,8 @@ window.addEventListener('contextmenu', function (e) {
 
 /* ---------- 查找与替换 ---------- */
 var findState = { query: '', caseSensitive: false, regex: false, lineEdge: '', ranges: [], idx: -1, open: false, replaceVisible: false };
+/* 匹配数上限：大文件里搜单个字符可能命中几十万处，无限收集 Range 并全部塞进 Highlight 会直接卡死 */
+var FIND_LIMIT = 2000;
 function findBarEl() { return $('findbar'); }
 function findRegex() {
   try { return new RegExp(findState.query, 'g' + (findState.caseSensitive ? '' : 'i')); }
@@ -163,10 +165,17 @@ function findRegex() {
 }
 function applyLineEdge(mode) {
   var ins = $('replace-input').value;
-  var lines = activeText().split('\n').map(function (L) { return mode === 'start' ? ins + L : L + ins; });
-  setEditorText(lines.join('\n'));
+  var src = activeText();
+  // 源文本末尾通常带一个换行（Vditor 的 getValue 总是以 \n 结尾），
+  // 直接 split 再拼会给末尾多造出一行，所以先把末尾换行摘下来
+  var tail = /\n$/.test(src) ? '\n' : '';
+  var body = tail ? src.slice(0, -1) : src;
+  if (!body) { toast('文档为空'); return; }
+  setEditorText(body.split('\n').map(function (L) {
+    return mode === 'start' ? ins + L : L + ins;
+  }).join('\n') + tail);
   setDirty(true);
-  toast(mode === 'start' ? '已插入到每行行首' : '已追加到每行行尾');
+  toast((mode === 'start' ? '已插入到每行行首' : '已追加到每行行尾') + '（Ctrl+Z 可撤销）');
 }
 
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -253,13 +262,8 @@ function runSearch(keepNearCaret) {
     if (cmView) {
       var query = new CM6.SearchQuery({ search: q, caseSensitive: findState.caseSensitive, regexp: findState.regex, replace: $('replace-input').value });
       cmView.dispatch({ effects: CM6.setSearchQuery.of(query) });
-      if (findState.regex && q) {
-        var re = findRegex();
-        findState.cmCount = re ? (cmView.state.doc.toString().match(re) || []).length : 0;
-      } else {
-        findState.cmCount = countOccurrences(cmView.state.doc.toString(), q, findState.caseSensitive);
-      }
-      findState.cmPos = q ? 1 : 0;
+      findState.cmCount = cmMatchCount(q);
+      findState.cmPos = q && findState.cmCount ? 1 : 0;
     } else { findState.cmCount = 0; findState.cmPos = 0; }
     $('find-count').textContent = q ? findState.cmCount + ' 处' : '0/0';
     return;
@@ -274,12 +278,14 @@ function runSearch(keepNearCaret) {
       if (!re) return;
     }
     segs.forEach(function (seg) {
+      if (findState.ranges.length >= FIND_LIMIT) return;
       if (re) {
         re.lastIndex = 0;
         var m;
         while ((m = re.exec(seg.text))) {
           if (!m[0].length) { re.lastIndex++; continue; }
           findState.ranges.push(offsetToRange(seg, m.index, m.index + m[0].length));
+          if (findState.ranges.length >= FIND_LIMIT) break;
         }
       } else {
         var needle = findState.caseSensitive ? q : q.toLowerCase();
@@ -287,6 +293,7 @@ function runSearch(keepNearCaret) {
         var pos = 0;
         while ((pos = hay.indexOf(needle, pos)) >= 0) {
           findState.ranges.push(offsetToRange(seg, pos, pos + q.length));
+          if (findState.ranges.length >= FIND_LIMIT) break;
           pos += q.length;
         }
       }
@@ -312,11 +319,11 @@ function runSearch(keepNearCaret) {
 function drawSearch() {
   if (isCodeMode()) {
     var total = findState.cmCount || 0;
-    $('find-count').textContent = (findState.query && total) ? findState.cmPos + '/' + total : (findState.query ? '0/0' : '0/0');
+    $('find-count').textContent = (findState.query && total) ? findState.cmPos + '/' + total + (total >= FIND_LIMIT ? '+' : '') : '0/0';
     return;
   }
   var n = findState.ranges.length;
-  $('find-count').textContent = n ? (findState.idx + 1) + '/' + n : '0/0';
+  $('find-count').textContent = n ? (findState.idx + 1) + '/' + n + (n >= FIND_LIMIT ? '+' : '') : '0/0';
   if (window.CSS && CSS.highlights) {
     if (!n) { CSS.highlights.delete('mde-hits'); CSS.highlights.delete('mde-cur'); return; }
     var hits = [];
@@ -349,21 +356,35 @@ function scrollToCurrent() {
     el = el.parentElement;
   }
 }
+/* 逐处前进（不再把整篇 doc.toString() 拉成字符串再全量扫描）：最多数到 limit 处，返回匹配总数 */
+function cmWalkMatches(q, limit, onMatch) {
+  var sq = new CM6.SearchQuery({ search: q, caseSensitive: findState.caseSensitive, regexp: findState.regex });
+  var it = sq.getCursor(cmView.state, 0, cmView.state.doc.length);
+  var n = 0, r;
+  while (n < (limit || FIND_LIMIT)) {
+    r = it.next();
+    if (r.done) break;
+    n++;
+    if (onMatch) onMatch(r.value, n);
+  }
+  return n;
+}
+function cmMatchCount(q) {
+  if (!q || !cmView) return 0;
+  try { return cmWalkMatches(q, FIND_LIMIT); }
+  catch (e) { return findState.regex ? 0 : countOccurrences(cmView.state.doc.toString(), q, findState.caseSensitive); }
+}
 function cmSyncPos() {
   /* 用当前选区估算当前是第几处匹配 */
   if (!cmView) { findState.cmPos = 0; return; }
   var q = findState.query; if (!q) { findState.cmPos = 0; return; }
-  var text = cmView.state.doc.toString();
-  var hay = findState.caseSensitive ? text : text.toLowerCase();
-  var nd = findState.caseSensitive ? q : q.toLowerCase();
-  var from = cmView.state.selection.main.from;
-  var m = 0, pos = 0;
-  while ((pos = hay.indexOf(nd, pos)) >= 0) {
-    if (pos > from) break;
-    m++; pos += Math.max(nd.length, 1);
+  var from = cmView.state.selection.main.from, m = 0;
+  try {
+    findState.cmCount = cmWalkMatches(q, FIND_LIMIT, function (range, n) { if (range.from <= from) m = n; });
+    findState.cmPos = m;
+  } catch (e) {
+    findState.cmCount = countOccurrences(cmView.state.doc.toString(), q, findState.caseSensitive);
   }
-  findState.cmPos = m;
-  findState.cmCount = countOccurrences(text, q, findState.caseSensitive);
 }
 function findNext() {
   if (isCodeMode() && cmView) {
@@ -487,6 +508,7 @@ var selHitsT = null;
 document.addEventListener('selectionchange', function () {
   clearTimeout(selHitsT);
   selHitsT = setTimeout(updateSelHits, 200);
+  scheduleCodeBlockHl();          // 光标进/出代码块时补一次高亮
 });
 function clearSelHits() {
   if (window.CSS && CSS.highlights) CSS.highlights.delete('mde-sel-hits');

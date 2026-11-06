@@ -6,6 +6,7 @@ document.getElementById('tabbar').addEventListener('contextmenu', function (e) {
   e.preventDefault();
   var id = tabEl.dataset.tab;
   var items = [
+    { label: (menuVisible ? '✓ ' : '') + '显示菜单栏', fn: function () { toggleMenubar(); } },
     { label: (tabsBottom ? '✓ ' : '') + '页签置于底部', fn: function () { tabsBottom = !tabsBottom; applyTabsPos(); } },
     { sep: true },
     { label: '关闭标签', danger: true, fn: function () { closeTab(id); } },
@@ -165,6 +166,13 @@ window.addEventListener('keydown', function (e) {
   else if (k === 'w') { e.preventDefault(); e.stopPropagation(); closeTab(activeId); }
   else if (k === 'f') { e.preventDefault(); e.stopPropagation(); openFind(false); }
   else if (k === 'h') { e.preventDefault(); e.stopPropagation(); openFind(true); }
+  else if (k === 'm' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); toggleMenubar(); }
+  // 撤销/重做：焦点不在正文（如刚点完查换栏的「行首」「替换」）时转发给编辑器
+  else if (k === 'z' || k === 'y') {
+    if (editorHasFocus()) return;        // 正文有焦点：交给内核原生处理
+    if (focusInTextInput()) return;      // 输入框里：那是输入框自己的撤销
+    if (appUndo(k === 'y' || e.shiftKey)) { e.preventDefault(); e.stopPropagation(); }
+  }
 }, true);
 window.addEventListener('beforeunload', function (e) {
   if (window.desktop) return;   // 桌面版由主进程统一弹确认框

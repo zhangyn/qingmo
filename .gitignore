@@ -15,3 +15,6 @@ out/
 
 # Node 依赖（lock 文件入库，目录不入库）
 node_modules/
+
+# 离线打包用的 Electron zip 缓存目录
+.electron-zip/

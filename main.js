@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { createGuard } = require('./lib/path-guard');
 
 const FILE_FILTERS = [
   { name: '所有支持的文件', extensions: ['md', 'markdown', 'txt', 'java', 'sql', 'json', 'xml', 'html', 'htm', 'css', 'js', 'ts', 'jsx', 'tsx', 'mjs', 'py', 'c', 'cpp', 'cc', 'h', 'hpp', 'log', 'ini', 'cfg', 'conf', 'bat', 'sh', 'yml', 'yaml', 'toml', 'properties', 'csv'] },
@@ -11,6 +12,33 @@ const FILE_FILTERS = [
 let win = null;
 let isDirty = false;
 let forceClose = false;
+let closePrompting = false;
+
+// 调试开关：默认关闭（生产环境不写日志、不转发渲染层 console）
+// 启动方式：QingMo.exe --qingmo-debug，或设环境变量 QINGMO_DEBUG=1
+// 注意不能叫 --debug：Electron 会把它当 Node 选项，直接报 DEP0062 并拒绝启动
+const DEBUG = process.argv.indexOf('--qingmo-debug') >= 0 || process.env.QINGMO_DEBUG === '1';
+
+/* ---------- 受信任路径范围 ----------
+   渲染层通过 IPC 传来的路径一律先过这道闸：只允许用户显式打开过的目录（含子目录）
+   与 userData（草稿/历史版本）。白名单持久化到 userData/trusted-roots.json，
+   否则重启后会话恢复读不到上次打开的文件。 */
+const guard = createGuard(process.platform);
+const rootsFile = () => path.join(app.getPath('userData'), 'trusted-roots.json');
+function loadTrustedRoots() {
+  guard.add(app.getPath('userData'));       // 草稿、历史版本、窗口状态都在这里
+  try { guard.load(JSON.parse(fs.readFileSync(rootsFile(), 'utf8'))); } catch (e) { /* 首次运行为空 */ }
+}
+function rememberRoot(fileOrDir) {
+  if (!fileOrDir) return;
+  let dir = fileOrDir;
+  try { if (!fs.statSync(fileOrDir).isDirectory()) dir = path.dirname(fileOrDir); } catch (e) { return; }
+  if (!guard.add(dir)) return;
+  // 立即落盘（文件很小、事件也很稀疏）：延迟写会丢“刚打开就退出”的目录，
+  // 下次启动的会话恢复就读不到那个文件了
+  try { fs.writeFileSync(rootsFile(), JSON.stringify(guard.list())); } catch (e) { /* ignore */ }
+}
+const DENIED = Object.freeze({ error: '拒绝访问：该路径不在受信任的打开目录内' });
 
 let iconv = null;   // 懒加载：仅写回非 UTF-8 编码时需要
 function decodeBuffer(buf) {
@@ -36,12 +64,18 @@ function encodeText(text, enc) {
 const fsp = fs.promises;
 function statOf(p) { try { const st = fs.statSync(p); return { mtimeMs: st.mtimeMs, size: st.size }; } catch (e) { return null; } }
 // 原子写：先写同目录临时文件再改名，避免写一半崩溃/断电损坏原文件
+// 必须先 fsync 再 rename：否则改名可能先落盘、数据还在页缓存，断电会留下空/截断文件
 async function atomicWrite(p, data) {
   const tmp = p + '.tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+  let fh = null;
   try {
-    await fsp.writeFile(tmp, data);
+    fh = await fsp.open(tmp, 'w');
+    await fh.writeFile(data);
+    await fh.sync();
+    await fh.close(); fh = null;
     await fsp.rename(tmp, p);
   } catch (e) {
+    if (fh) { try { await fh.close(); } catch (e3) { /* ignore */ } }
     try { await fsp.unlink(tmp); } catch (e2) { /* ignore */ }
     throw e;
   }
@@ -55,7 +89,7 @@ if (!gotLock) { app.quit(); } else {
     const f = (argv || []).find(function (a) {
       try { return fs.existsSync(a) && fs.statSync(a).isFile() && /\.(md|markdown|txt|java|sql|json|xml|html?|css|js|mjs|ts|jsx|tsx|py|c|cpp|cc|h|hpp|log|ini|cfg|conf|bat|sh|yml|yaml|toml|properties|csv)$/i.test(a); } catch (e) { return false; }
     });
-    if (f && win) win.webContents.send('menu', 'openpath:' + f);
+    if (f && win) { rememberRoot(f); win.webContents.send('menu', 'openpath:' + f); }   // 用户双击/命令行打开：信任它所在目录
   });
 }
 
@@ -89,7 +123,11 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
-      // 纯本地应用：允许页面加载同目录下的编辑器内核资源
+      // 暂时必须为 false：Vditor 4.x 用**同步 XHR**（dist/index.min.js 里
+      // `new XMLHttpRequest(); open("GET",url,false)`）按需拉取 KaTeX/Mermaid/
+      // highlight.js，file:// 下同步 XHR 会被 CORS 拦死，公式与图表将全部失效。
+      // 真正的收紧办法是改用自定义协议（protocol.handle('app://…')）托管内核资源，
+      // 而不是靠关掉 webSecurity；本版本的补偿措施是 IPC 侧的路径白名单（见 guard）。
       webSecurity: false
     }
   });
@@ -102,15 +140,19 @@ function createWindow() {
     } catch (err) {}
     if (forceClose || !isDirty) return;
     e.preventDefault();
-    const r = dialog.showMessageBoxSync(win, {
+    if (closePrompting) return;          // 对话框已弹出，别重复弹
+    closePrompting = true;
+    dialog.showMessageBox(win, {          // 异步：同步版会把主进程（含 IPC）整段阻塞
       type: 'warning',
       buttons: ['放弃修改并退出', '取消'],
       defaultId: 1,
       cancelId: 1,
       message: '有未保存的修改',
       detail: '未保存的内容已自动存入草稿，重新打开后可恢复。'
-    });
-    if (r === 0) { forceClose = true; win.close(); }
+    }).then(({ response }) => {
+      closePrompting = false;
+      if (response === 0) { forceClose = true; win.close(); }
+    }, () => { closePrompting = false; });
   });
   win.on('closed', () => { win = null; });
   win.webContents.on('did-fail-load', (e, code, desc, url) => {
@@ -119,16 +161,21 @@ function createWindow() {
   win.webContents.on('render-process-gone', (e, d) => {
     logLine('render-process-gone: ' + JSON.stringify(d));
   });
-  win.webContents.on('console-message', (e, level, message, line, sourceId) => {
-    logLine('console[' + level + ']: ' + message + ' @' + sourceId + ':' + line);
-  });
+  // console 转发开销大（每条一次同步写盘），仅调试模式挂载
+  if (DEBUG) {
+    win.webContents.on('console-message', (e, level, message, line, sourceId) => {
+      logLine('console[' + level + ']: ' + message + ' @' + sourceId + ':' + line);
+    });
+  }
   // 导航守卫：点击链接不得带走编辑器窗口；新窗口一律拒绝，网页交给系统浏览器
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e, url) => {
     e.preventDefault();
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });
-  win.loadFile('editor.html', { query: { debug: '1' } });
+  // 只有调试模式才把 ?debug 传给渲染层，生产环境保持静默
+  // 用 __dirname 拼绝对路径：保证从任意工作目录（包括测试脚本）启动都能找到页面与内核资源
+  win.loadFile(path.join(__dirname, 'editor.html'), DEBUG ? { query: { debug: '1' } } : undefined);
 }
 
 
@@ -140,6 +187,7 @@ ipcMain.handle('file:open', async () => {
   const p = r.filePaths[0];
   try {
     const d = decodeBuffer(await fsp.readFile(p));
+    rememberRoot(p);                       // 用户显式选定的目录加入白名单
     return { canceled: false, name: path.basename(p), path: p, content: d.content, enc: d.enc, st: statOf(p) };
   } catch (err) {
     return { canceled: false, error: String(err) };
@@ -147,6 +195,7 @@ ipcMain.handle('file:open', async () => {
 });
 
 ipcMain.handle('file:readPath', async (e, p) => {
+  if (!guard.allows(p)) return DENIED;
   try {
     const d = decodeBuffer(await fsp.readFile(p));
     return { content: d.content, enc: d.enc, st: statOf(p) };
@@ -156,6 +205,7 @@ ipcMain.handle('file:readPath', async (e, p) => {
 });
 
 ipcMain.handle('file:write', async (e, p, content, enc) => {
+  if (!guard.allows(p)) return DENIED;
   try {
     await backupHistory(p);
     await atomicWrite(p, encodeText(content, enc || 'utf-8'));
@@ -171,6 +221,7 @@ ipcMain.handle('file:saveAs', async (e, content, suggested, enc) => {
   try {
     await backupHistory(r.filePath);
     await atomicWrite(r.filePath, encodeText(content, enc || 'utf-8'));
+    rememberRoot(r.filePath);
     return { ok: true, name: path.basename(r.filePath), path: r.filePath, st: statOf(r.filePath) };
   } catch (err) {
     return { error: String(err) };
@@ -225,6 +276,7 @@ const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif:
 ipcMain.handle('image:save', async (e, dir, baseName, b64) => {
   try {
     if (!dir || !b64) return { error: '参数不完整' };
+    if (!guard.allows(dir)) return DENIED;
     let name = String(baseName || 'image').replace(/[\\/:*?"<>|\s]+/g, '-');
     if (!/\.[a-z0-9]{1,8}$/i.test(name)) name += '.png';
     await fsp.mkdir(dir, { recursive: true });
@@ -241,10 +293,22 @@ ipcMain.handle('image:save', async (e, dir, baseName, b64) => {
 
 // 读取本地图片为 base64（导出 HTML/PDF 时内嵌用）
 ipcMain.handle('file:readBinary', async (e, p) => {
+  if (!guard.allows(p)) return DENIED;
   try {
     const buf = await fsp.readFile(p);
     const ext = ((p.match(/\.([a-z0-9]+)$/i) || [])[1] || '').toLowerCase();
     return { ok: true, base64: buf.toString('base64'), mime: IMG_MIME[ext] || 'application/octet-stream' };
+  } catch (err) {
+    return { error: String(err) };
+  }
+});
+
+// 导出 HTML 用的样式：主进程直读内置内核 CSS（避免渲染层用 fetch 读本地文件）
+ipcMain.handle('app:exportCss', async () => {
+  try {
+    const main = await fsp.readFile(path.join(__dirname, 'dist', 'index.css'), 'utf8');
+    const theme = await fsp.readFile(path.join(__dirname, 'dist', 'css', 'content-theme', 'light.css'), 'utf8');
+    return { css: main + '\n' + theme };
   } catch (err) {
     return { error: String(err) };
   }
@@ -291,11 +355,13 @@ ipcMain.on('draft:clear', (e, id) => {
 });
 
 ipcMain.handle('file:statPath', async (e, p) => {
+  if (!guard.allows(p)) return { error: '拒绝访问' };
   const st = statOf(p);
   return st ? { ok: true, mtimeMs: st.mtimeMs, size: st.size } : { error: '文件不存在' };
 });
 
 ipcMain.handle('history:list', async (e, p) => {
+  if (!guard.allows(p)) return { ok: true, items: [] };
   try {
     const dir = path.join(historyDir(), pathHash(p));
     const items = (await fsp.readdir(dir)).filter(f => f.endsWith('.raw'))
@@ -307,17 +373,19 @@ ipcMain.handle('history:list', async (e, p) => {
 });
 
 // 通用多按钮询问框，返回被点按钮的下标（Esc = 最后一项）
+// 用异步版：showMessageBoxSync 会把主进程（含所有 IPC）整段阻塞
 ipcMain.handle('app:ask', async (e, opts) => {
   const buttons = (opts && opts.buttons) || ['确定'];
-  return dialog.showMessageBoxSync(win, {
+  const { response } = await dialog.showMessageBox(win, {
     type: 'question', buttons,
     defaultId: buttons.length - 1, cancelId: buttons.length - 1,
     message: (opts && opts.message) || '请选择', detail: (opts && opts.detail) || ''
   });
+  return response;
 });
 
 ipcMain.handle('app:confirm', async (e, opts) => {
-  const r = dialog.showMessageBoxSync(win, {
+  const { response } = await dialog.showMessageBox(win, {
     type: 'warning',
     buttons: ['关闭', '取消'],
     defaultId: 1,
@@ -325,7 +393,7 @@ ipcMain.handle('app:confirm', async (e, opts) => {
     message: (opts && opts.message) || '确定吗？',
     detail: (opts && opts.detail) || ''
   });
-  return r === 0;
+  return response === 0;
 });
 
 ipcMain.on('win:print', () => { if (win) win.webContents.print({}); });
@@ -346,6 +414,7 @@ ipcMain.on('app:openInFolder', (e, p) => { if (p) shell.showItemInFolder(p); });
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);   // 无原生菜单：所有入口在页面内，快捷键由页面层处理
+  loadTrustedRoots();
   createWindow();
 });
 

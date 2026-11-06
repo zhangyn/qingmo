@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('desktop', {
   saveAs: (content, suggested, enc) => ipcRenderer.invoke('file:saveAs', content, suggested, enc),
   exportHtml: (html, suggested) => ipcRenderer.invoke('file:exportHtml', html, suggested),
   exportPdf: (html, suggested) => ipcRenderer.invoke('file:exportPdf', html, suggested),
+  exportCss: () => ipcRenderer.invoke('app:exportCss'),
   saveImage: (dir, baseName, b64) => ipcRenderer.invoke('image:save', dir, baseName, b64),
   readBinary: (p) => ipcRenderer.invoke('file:readBinary', p),
   openExternal: (url) => ipcRenderer.send('app:openExternal', url),

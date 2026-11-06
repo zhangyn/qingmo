@@ -98,6 +98,7 @@ if (location.protocol === 'file:' && !window.desktop) {
     '浏览器安全策略不允许直接双击打开本页（编辑器内核无法加载）。</div>';
 } else {
 applyTheme();
+applyMenubar(false);   // 恢复上次的菜单栏显隐（这里不重复写存储）
 vditor = new Vditor('editor', {
   cdn: '.',
   lang: 'zh_CN',
@@ -106,6 +107,9 @@ vditor = new Vditor('editor', {
   theme: dark ? 'dark' : 'classic',
   value: WELCOME,
   cache: { enable: false },       // 草稿与标签由本页自管
+  // 撤销粒度：内核默认 800ms，会把 800ms 内的所有输入合并成一步——
+  // 连打几行再按 Ctrl+Z 会一次删掉好几行。改小到 100ms 后基本上“一个字一步”。
+  undoDelay: 100,
   counter: { enable: true },
   preview: {
     theme: { current: dark ? 'dark' : 'light', path: './dist/css/content-theme' },
@@ -120,9 +124,11 @@ vditor = new Vditor('editor', {
   upload: {
     handler: function (files) { insertImages(files); return ''; }
   },
-  input: function () { if (ready) { lastEditAt = Date.now(); setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh(); scheduleOutlineRefresh(); typewriterScrollMd(); } },
+  input: function () { if (ready) { lastEditAt = Date.now(); setDirty(true); scheduleLabelRefresh(); scheduleFindRefresh(); scheduleOutlineRefresh(); typewriterScrollMd(); hlCodeBlockNow(); } },
   after: function () {
     ready = true;
+    // 撤销栈深度：内核默认 50 步，降到 100ms 粒度后只够 50 个字符，提大一些
+    try { if (vditor.vditor && vditor.vditor.undo) vditor.vditor.undo.stackSize = 400; } catch (e) { /* ignore */ }
     migrateDrafts().then(function () { restoreSession(); });
     applyWs(); applyWrap(); applyOutline();
   }

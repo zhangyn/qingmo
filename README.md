@@ -22,6 +22,10 @@
 - **视图开关**：显示空白字符、自动换行（视图菜单，带勾选状态）
 - **行工具**：多行合并为一行（单引号/双引号/无引号，逗号分隔）、拆分为多行
   ——多行 ID/单号一键变成 SQL IN 列表或接口参数；右键菜单或代码模式工具栏可达
+- **行首/行尾批量插入**：查换栏「行首」「行尾」按钮把替换框内容插到每行开头/结尾，
+  Ctrl+Z 可一步撤销
+- **代码块编辑中保持高亮**：光标进入代码块（编辑态）时也保留语法配色——
+  做法是在上面盖一层 highlight.js 着色层，**不改内核读取的 DOM**，正文与撤销都不受影响
 - **行快捷键**：`Ctrl+C`/`Ctrl+X` 无选区时复制/剪切当前行、`Ctrl+Y` 删除当前行、
   `Ctrl+D` 向下复制、`Ctrl+Shift+↑/↓` 移动行
 - **列选中**（代码模式）：`Alt + 方向键` 竖向按列块选择（EditPlus 式），或
@@ -39,7 +43,8 @@
 - **图片粘贴/拖入**：自动保存到文档同目录 `assets/`，以相对路径引用
   （文档未保存时回退为 base64 内嵌；导出 HTML/PDF 时本地图片自动内嵌）
 - **其他**：数学公式（KaTeX）、Mermaid 图表、明暗主题、打字机模式（光标居中滚动）、
-  字数统计、括号自动补全（代码模式）、单实例锁、窗口状态记忆、页签右键菜单与拖拽排序（可置底）
+  字数统计、括号自动补全（代码模式）、单实例锁、窗口状态记忆、页签右键菜单与拖拽排序（可置底）、
+  **菜单栏可收起**（点页签栏右端 ☰、页签右键或 `Ctrl+Shift+M`；收起后 ☰ 仍在，随时恢复）
 
 ## 快捷键
 
@@ -55,7 +60,7 @@
 | 移动行 | `Ctrl+Shift+↑/↓`（代码模式） |
 | 打印 | `Ctrl+P` |
 | 全屏 | `F11` |
-| 打印 | `Ctrl+P` |
+| 显示/隐藏菜单栏 | `Ctrl+Shift+M` |
 | 缩放 | `Ctrl+滚轮` 或 `Ctrl+=` / `Ctrl+-` |
 | 明暗主题 | 右上角 🌙/☀️ |
 
@@ -74,23 +79,39 @@ md-editor/
 ├── main.js          Electron 主进程：窗口、文件对话框、PDF 导出、
 │                    图片资源化、导航守卫、关闭确认（无原生菜单）
 ├── preload.js       渲染层 ↔ 主进程的安全桥接（contextBridge）
+├── lib/path-guard.js 受信任路径范围：主进程 IPC 的读写白名单（纯 Node，可单测）
+├── test/smoke.js     冒烟测试（npm run smoke）：隐藏窗口加载页面，
+│                    断言菜单栏显隐、Tab 缩进、每标签撤销栈等关键路径
+├── test/path-guard.test.js 路径白名单单测（npm test，不需要 GUI）
 ├── package.json     应用清单（main 入口）
 ├── 使用说明.txt      帮助按钮打开的说明文档（随应用打包）
-├── cm6.js           CodeMirror 6 内核（esbuild 打包，含 Java/SQL/JSON/XML/
+├── src/cm6-entry.js CodeMirror 6 bundle 的源码入口（导出的 CM6.* API 清单）
+├── scripts/         build-cm6.mjs（重新打包 cm6.js）、gen-eslint-globals.mjs
+├── cm6.js           CodeMirror 6 内核（**自动生成，勿手改**；含 Java/SQL/JSON/XML/
 │                    HTML/CSS/JS/Python/C++ 语言包与暗色配色）
 ├── dist/            Vditor 4.0.1 运行时（vendored，含 KaTeX/Mermaid/
 │                    代码高亮等全部依赖，离线可用）
+├── eslint.config.mjs / eslint.globals.mjs  lint 配置与渲染层全局名清单
 └── web/             备用的浏览器模式启动器（serve.py + bat）
 ```
 
 ## 组装桌面版
 
+一条命令（需能下载 Electron 运行时；离线时用 `--electron-zip-dir` 指向本地
+`electron-v33.x.x-win32-x64.zip` 所在目录）：
+
+```bash
+npm install && npm run dist     # 产物在 out/qingmo-win32-x64/QingMo.exe
+```
+
+或者手动组装（无网 / 无 Node 环境）：
+
 1. 下载 Electron 运行时（win32-x64），例如从
    [npmmirror 镜像](https://registry.npmmirror.com/-/binary/electron/)获取 `electron-v33.x.x-win32-x64.zip` 并解压；
    已装 Node.js 也可直接 `npm i` 安装 electron 后 `npx electron .`
 2. 删除解压目录里的 `resources/default_app.asar`
-3. 将本仓库的 `editor.html`、`js/`、`main.js`、`preload.js`、`package.json`、`cm6.js`、
-   `使用说明.txt`、`dist/` 放入 `resources/app/`
+3. 将本仓库的 `editor.html`、`js/`、`lib/`、`main.js`、`preload.js`、`package.json`、`cm6.js`、
+   `使用说明.txt`、`dist/`、以及 `node_modules/iconv-lite`（GBK 读写要用）放入 `resources/app/`
 4. 把 `electron.exe` 改名（如 `MD编辑器.exe`），双击即可运行；
    可为它创建桌面快捷方式
 
@@ -112,14 +133,49 @@ md-editor/
 - **草稿与会话**：未保存内容在停止输入后写入 `userData/drafts/`（浏览器版回退
   `localStorage`，旧版启动时自动迁移），按标签 ID 隔离；标签列表与激活状态持久化，
   启动时恢复并合并磁盘内容
+- **调试日志**：默认完全不写日志。需要排查问题时用 `QingMo.exe --qingmo-debug` 启动
+  （或设环境变量 `QINGMO_DEBUG=1`），渲染层 console 会转发到
+  `%TEMP%\mde-debug.log`（2MB 轮转）。注意开关不能叫 `--debug`：Electron 会把它
+  当成 Node 选项而直接报 DEP0062 拒绝启动
+- **文件访问边界**：渲染层通过 IPC 传来的路径一律先经过 `lib/path-guard.js` 校验，
+  只允许**用户显式打开过的目录**（含子目录）与 `userData`；白名单持久化在
+  `userData/trusted-roots.json`，否则重启后会话恢复读不到上次的文件
 
 ## 已知取舍
 
-- 撤销历史不跨标签页保留（切回标签后撤销栈重建）
+- 每个标签页拥有独立的 EditorState（各自的撤销栈与选区），因此**代码模式的撤销历史不跨标签页丢失**；
+  但为控制内存，只缓存最近 12 个标签的 state，更早的标签切回后撤销栈会重建
+  （正文不受影响），见 `js/02-codemirror.js` 的 `CM_STATE_MAX`
+- md 模式（Vditor 内核）的撤销栈不能跨文档复用：切标签时会把撤销基线重置为本标签内容，
+  所以 md 标签的撤销只覆盖本次切页之后的操作（不会把别的文件内容倒回来）
+- 行首/行尾插入、全部替换这类批量改写会立即把结果压入撤销栈，Ctrl+Z 可一步撤销
 - "全部替换"作用于源文本（与 Typora 相同），也会命中链接地址等位置
 - 桌面版未签名，首次运行可能被杀毒软件拦截，选择允许即可
 - 超大 Markdown（1MB 级）自动降级为代码模式打开（所见即所得渲染的架构上限）
 - GBK 只在桌面版支持（浏览器备用模式仍为 UTF-8）
+
+## 开发
+
+```bash
+npm install        # 装开发依赖（electron / esbuild / eslint / @codemirror/*）
+npm start          # 直接跑 Electron 开发版
+npm run build:cm6  # 改过 src/cm6-entry.js 后重新生成 cm6.js
+npm run lint       # ESLint（no-undef 能抓出跨文件拼写错误）
+npm run lint:globals  # js/*.js 新增顶层变量后刷新全局名清单
+```
+
+> `cm6.js` 是 `src/cm6-entry.js` 的 esbuild 产物，不要再手改它。
+> 产物头部注释会记录本次打包用到的各依赖版本。
+
+## 测试
+
+```bash
+npm test          # 路径白名单单测（纯 Node，不需要 GUI）
+npm run smoke     # 渲染层交互冒烟（真实 Electron + 桩 IPC，隐藏窗口）
+npm run smoke:app # 主进程集成测试（加载真 main.js，验证白名单与原子写）
+```
+
+三个脚本都以退出码返回结果，可直接接进 CI（需要图形会话）。
 
 ## 许可
 

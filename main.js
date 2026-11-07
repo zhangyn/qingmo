@@ -47,8 +47,12 @@ async function atomicWrite(p, data) {
   }
 }
 
-// 单实例：重复启动时聚焦已有窗口，并把命令行里的文件转给它打开
-const gotLock = app.requestSingleInstanceLock();
+// 冒烟自检实例：--smoke 启动，独立配置，跑完弹结果
+const SMOKE = process.argv.some(function (a) { return /--?smoke/.test(a); });
+if (SMOKE) app.setPath('userData', path.join(app.getPath('userData'), 'smoke-profile'));
+
+// 单实例：重复启动时聚焦已有窗口，并把命令行里的文件转给它打开（自检实例豁免）
+const gotLock = SMOKE ? true : app.requestSingleInstanceLock();
 if (!gotLock) { app.quit(); } else {
   app.on('second-instance', (ev, argv) => {
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
@@ -128,7 +132,7 @@ function createWindow() {
     e.preventDefault();
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });
-  win.loadFile('editor.html', { query: { debug: '1' } });
+  win.loadFile('editor.html', { query: SMOKE ? { smoke: '1' } : {} });
 }
 
 

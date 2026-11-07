@@ -14,4 +14,6 @@ electron/
 out/
 
 # Node 依赖（lock 文件入库，目录不入库）
-node_modules/
+node_modules/*
+!node_modules/iconv-lite/
+!node_modules/safer-buffer/

@@ -118,6 +118,19 @@ function jsonMin() {
   toast('JSON 已压缩');
 }
 $('ct-json').addEventListener('click', function () { jsonFormat(); });
+function sqlFormatSel() {
+  if (!isCodeMode()) { toast('SQL 格式化请在代码模式使用'); return; }
+  var sel = cmView.state.selection.main;
+  var hasSel = sel.from !== sel.to;
+  var text = cmView.state.doc.sliceString(hasSel ? sel.from : 0, hasSel ? sel.to : cmView.state.doc.length);
+  var out;
+  try { out = CM6.sqlFormat(text, { language: 'sql', keywordCase: 'upper', tabWidth: 4 }); } catch (e) { toast('SQL 格式化失败：' + e.message); return; }
+  if (hasSel) cmView.dispatch({ changes: { from: sel.from, to: sel.to, insert: out } });
+  else setEditorText(out);
+  setDirty(true);
+  toast('SQL 已格式化');
+}
+$('ct-sql').addEventListener('click', function () { sqlFormatSel(); });
 $('ct-jsonmin').addEventListener('click', function () { jsonMin(); });
 $('ct-ws').addEventListener('click', function () { ACTIONS['toggle-ws'](); });
 $('ct-wrap').addEventListener('click', function () { ACTIONS['toggle-wrap'](); });
@@ -195,6 +208,7 @@ function lineTool(op) {
 
 
 /* ---------- 列块选择与编辑（EditPlus 式：Alt+方向键 / Win+拖拽；覆盖层高亮+按键拦截，不依赖多光标） ---------- */
+var KBLOG = /debug|smoke/.test(location.search);   // 列块诊断日志开关
 var kbBlock = null;      // { sLine, sCol, hLine, hCol } 起始角与移动角
 var colDrag = null;      // Win+拖拽进行中
 var __kbSelfAt = 0;      // 列块自身事务的时间戳（延迟二段更新不计为外部变更）
@@ -209,7 +223,7 @@ function colBlockLayerEl() {
 }
 function kbBlockCancel() {
   if (!kbBlock) return;
-  console.log('[列块] 取消: ' + (new Error().stack.split(String.fromCharCode(10))[2] || '').trim().slice(0, 70));
+  if (KBLOG) console.log('[列块] 取消: ' + (new Error().stack.split(String.fromCharCode(10))[2] || '').trim().slice(0, 70));
   kbBlock = null; colDrag = null;
   if (colBlockLayer) colBlockLayer.innerHTML = '';
 }
@@ -222,7 +236,7 @@ function blockCorners(doc) {
 function drawColBlockOverlay() {
   if (!cmView || !kbBlock) { if (colBlockLayer) colBlockLayer.innerHTML = ''; return; }
   var layer = colBlockLayerEl();
-  console.log('[列块] 绘制覆盖层: 行' + kbBlock.sLine + '-' + kbBlock.hLine + ' 列' + kbBlock.sCol + '-' + kbBlock.hCol);
+  if (KBLOG) console.log('[列块] 绘制覆盖层: 行' + kbBlock.sLine + '-' + kbBlock.hLine + ' 列' + kbBlock.sCol + '-' + kbBlock.hCol);
   layer.innerHTML = '';
   var doc = cmView.state.doc;
   var c = blockCorners(doc);
@@ -339,7 +353,7 @@ function kbBlockKey(e) {
   if (k === 'Escape') { kbBlockCancel(); return true; }
   if (e.ctrlKey || e.metaKey) {
     var low = k.toLowerCase();
-    if (low === 'c') { var CT = colBlockText(); console.log('[列块] Ctrl+C 复制: ' + JSON.stringify(CT)); copyColToClipboard(CT); return true; }
+    if (low === 'c') { var CT = colBlockText(); if (KBLOG) console.log('[列块] Ctrl+C 复制: ' + JSON.stringify(CT)); copyColToClipboard(CT); return true; }
     if (low === 'x') { var txt = colBlockText(); copyColToClipboard(txt); deleteColBlock(); return true; }
     kbBlockCancel(); return false;                             // 其余组合键走默认（docChanged 会清理）
   }
@@ -358,11 +372,11 @@ function colPosAt(e) {
 }
 /* Win+拖拽建立/调整列块（鼠标路径） */
 $('cmhost').addEventListener('mousedown', function (e) {
-  console.log('[列块] mousedown 进入: alt=' + e.altKey + ' meta=' + e.metaKey + ' btn=' + e.button + ' code=' + isCodeMode() + ' 目标=' + (e.target.className || e.target.tagName || '').toString().slice(0, 20));
+  if (KBLOG) console.log('[列块] mousedown 进入: alt=' + e.altKey + ' meta=' + e.metaKey + ' btn=' + e.button + ' code=' + isCodeMode() + ' 目标=' + (e.target.className || e.target.tagName || '').toString().slice(0, 20));
   kbBlockCancel();
-  if (e.button !== 0 || !(e.metaKey || e.altKey) || !isCodeMode()) { console.log('[列块] 前置检查未通过'); return; }
+  if (e.button !== 0 || !(e.metaKey || e.altKey) || !isCodeMode()) { if (KBLOG) console.log('[列块] 前置检查未通过'); return; }
   var pos = colPosAt(e);
-  console.log('[列块] pos=' + pos);
+  if (KBLOG) console.log('[列块] pos=' + pos);
   if (pos == null) return;
   e.preventDefault();
   e.stopPropagation();         // 捕获阶段阻断 CM6 自带拖选
@@ -380,10 +394,10 @@ window.addEventListener('mousemove', function (e) {
   var doc = cmView.state.doc, L = doc.lineAt(pos);
   kbBlock.hLine = L.number; kbBlock.hCol = pos - L.from;
   renderColBlock();
-  console.log('[列块] move: 行' + kbBlock.hLine + ' 列' + kbBlock.hCol);
+  if (KBLOG) console.log('[列块] move: 行' + kbBlock.hLine + ' 列' + kbBlock.hCol);
 });
 window.addEventListener('mouseup', function () {
-  console.log('[列块] mouseup: 块=' + JSON.stringify(kbBlock));
+  if (KBLOG) console.log('[列块] mouseup: 块=' + JSON.stringify(kbBlock));
   colDrag = null;
 });
 /* 滚动/窗口变化 → 覆盖层跟随 */

@@ -1,4 +1,11 @@
 'use strict';
+/* ---------- 桥接面自检：页面依赖的 desktop 方法必须全部存在 ---------- */
+var REQUIRED_BRIDGE = ['open', 'readPath', 'write', 'saveAs', 'exportHtml', 'exportPdf', 'confirm', 'print', 'editCmd', 'setDirty', 'onMenu', 'openHelp', 'toggleFullscreen', 'openInFolder'];
+if (window.desktop) {
+  var __bm = REQUIRED_BRIDGE.filter(function (m) { return typeof window.desktop[m] !== 'function'; });
+  if (__bm.length) console.error('BRIDGE-MISSING: ' + __bm.join(','));
+}
+
 /* ---------- 全局状态 ---------- */
 var vditor = null;
 var ready = false;
